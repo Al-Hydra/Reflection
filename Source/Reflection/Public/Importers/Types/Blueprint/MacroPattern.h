@@ -51,6 +51,11 @@ struct FMacroMatch {
 	/* Statements that are the macro's own workings and stand for nothing on their own */
 	TSet<int32> Internal;
 
+	/* Statements a run arrives at that are one of the macro's other ways in, by the pin it arrives
+	 * at. A loop's Break is the plain case: the body reaching it is the run that was wired there,
+	 * and all the macro does with it is put a flag up. */
+	TMap<int32, FName> Takes;
+
 	/* Which macro this is, filled in once matched */
 	const struct FMacroPattern* Pattern = nullptr;
 

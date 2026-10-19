@@ -113,7 +113,10 @@ T* LoadObjectByPath(const FString& InPath) {
 
 inline bool SavePackageImmediately(UPackage* Package) {
 	const FString PackageName = Package->GetName();
-	const FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+
+	/* A level is written with an extension of its own, and the loader finds a package by it */
+	const FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName,
+		Package->ContainsMap() ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension());
 
 #if ENGINE_UE5
 	FSavePackageArgs SaveArgs; {

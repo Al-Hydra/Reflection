@@ -12,8 +12,12 @@
 
 #include "Importers/Constructor/ImportReader.h"
 #include "Importers/Constructor/Importer.h"
+#include "Importers/Types/World/LevelRead.h"
 #include "Modules/Cloud/Cloud.h"
+/* 5.0 gathered what a save is told into a header of its own */
+#if ENGINE_UE5
 #include "UObject/SavePackage.h"
+#endif
 
 DECLARE_LOG_CATEGORY_CLASS(LogReflectImport, All, All);
 
@@ -37,10 +41,37 @@ int32 UReflectImportCommandlet::Main(const FString& Params) {
 		return 1;
 	}
 
-	const TSharedPtr<FJsonObject> Response = Cloud::Export::GetRawBlocking(Path);
+	TSharedPtr<FJsonObject> Response;
+
+	/* Read out of a file rather than off the cloud.
+	 *
+	 * What the cloud gives for a path is the same every time, which is what makes it worth reading
+	 * and no use for trying anything. Kept with -json and read back with -from, an export can be
+	 * changed and the change put through the same importer: an asset whose class this engine has
+	 * not got is reparented to one it has, and everything else about it is read the way it always
+	 * would be. The path is still said, since that is where what comes out is written. */
+	if (FString From; FParse::Value(*Params, TEXT("from="), From) && !From.IsEmpty()) {
+		FString Held;
+
+		if (!FFileHelper::LoadFileToString(Held, *From)) {
+			UE_LOG(LogReflectImport, Error, TEXT("there is nothing to read at \"%s\""), *From);
+
+			return 1;
+		}
+
+		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Held), Response) || !Response.IsValid()) {
+			UE_LOG(LogReflectImport, Error, TEXT("\"%s\" is not something that reads as json"), *From);
+
+			return 1;
+		}
+
+		UE_LOG(LogReflectImport, Display, TEXT("reading \"%s\" rather than asking the cloud"), *From);
+	} else {
+		Response = Cloud::Export::GetRawBlocking(Path);
+	}
 
 	if (!Response.IsValid() || !Response->HasField(TEXT("exports"))) {
-		UE_LOG(LogReflectImport, Error, TEXT("the cloud had nothing at \"%s\""), *Path);
+		UE_LOG(LogReflectImport, Error, TEXT("there was nothing at \"%s\""), *Path);
 
 		return 1;
 	}
@@ -59,6 +90,35 @@ int32 UReflectImportCommandlet::Main(const FString& Params) {
 		if (FJsonSerializer::Serialize(Response.ToSharedRef(), Writer) && FFileHelper::SaveStringToFile(Written, *Dump)) {
 			UE_LOG(LogReflectImport, Display, TEXT("what the cloud gave back was kept at \"%s\""), *Dump);
 		}
+	}
+
+	/* A level writes no package, so there is nothing below for it to say anything about */
+	if (FLevelRead::Handles(Exports)) {
+		FRLevelReadResult Result;
+
+		if (!FLevelRead::FromCloud(Exports, Path, &Result)) {
+			UE_LOG(LogReflectImport, Error, TEXT("nothing was read from \"%s\""), *Path);
+
+			return 1;
+		}
+
+		UE_LOG(LogReflectImport, Display, TEXT("%d placed, %d missing (%d blueprint, %d class, %d refused), %d left out"),
+			Result.Placed, Result.Missing(), Result.MissingBlueprints, Result.UnusableClasses, Result.Failed, Result.LeftOut);
+
+		/* Said out loud: headless there is no window for the report to come up in */
+		for (const TSharedPtr<FImportIssueAsset>& Asset : FImportIssues::GetAssets()) {
+			UE_LOG(LogReflectImport, Display, TEXT("  %s"), *Asset->Name);
+
+			for (const TSharedPtr<FImportIssue>& Issue : Asset->Issues) {
+				UE_LOG(LogReflectImport, Display, TEXT("    [%s] %s%s%s"),
+					*GetImportIssueText(Issue->Kind).ToString(),
+					*Issue->Summary,
+					Issue->Count > 1 ? *FString::Printf(TEXT(" (x%d)"), Issue->Count) : TEXT(""),
+					Issue->Detail.IsEmpty() ? TEXT("") : *(TEXT(": ") + Issue->Detail));
+			}
+		}
+
+		return 0;
 	}
 
 	IImporter* Importer = nullptr;

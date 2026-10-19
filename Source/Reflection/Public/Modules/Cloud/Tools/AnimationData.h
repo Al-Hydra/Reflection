@@ -302,10 +302,11 @@ inline bool ReadAnimationData(USerializerContainer* Container, const bool UseSel
 
 	if (!AnimSequenceBase) return false;
 
-	/* Empty all Notifies */
+	/* Emptied before anything is read into them, for whatever is being reflected onto. */
+	AnimSequenceBase->Notifies.Empty();
+
 	if (UAnimSequence* CastedAnimSequence = Cast<UAnimSequence>(AnimSequenceBase)) {
 		CastedAnimSequence->AuthoredSyncMarkers.Empty();
-		CastedAnimSequence->Notifies.Empty();
 	}
 
 	Container->DeserializeExports(AnimSequenceBase);
@@ -350,6 +351,41 @@ inline bool ReadAnimationData(USerializerContainer* Container, const bool UseSel
 	 * again here, the same way the engine links them when it loads a montage, so each one resolves
 	 * against the montage it is actually in rather than against nothing. */
 	if (UAnimMontage* Montage = Cast<UAnimMontage>(AnimSequenceBase)) {
+		/* And whether there is a montage for them to sit in. */
+		TArray<FString> Short;
+
+		for (const FSlotAnimationTrack& Slot : Montage->SlotAnimTracks) {
+			for (const FAnimSegment& Segment : Slot.AnimTrack.AnimSegments) {
+				/* Named through the segment from 5.2 on, and kept on it outright before that */
+#if UE5_2_BEYOND
+				UAnimSequenceBase* Plays = Segment.GetAnimReference();
+#else
+				UAnimSequenceBase* Plays = Segment.AnimReference;
+#endif
+
+				if (Plays == nullptr) {
+					Short.Add(TEXT("a segment naming nothing"));
+
+					continue;
+				}
+
+				const float Wants = Segment.AnimEndTime;
+				const float Has = Plays->GetPlayLength();
+
+				if (Has + KINDA_SMALL_NUMBER < Wants) {
+					Short.Add(FString::Printf(TEXT("%s (%.3fs of %.3fs)"), *Plays->GetName(), Has, Wants));
+				}
+			}
+		}
+
+		if (Short.Num() > 0) {
+			FImportIssues::Report(
+				EImportIssue::Data,
+				FString::Printf(TEXT("%d of the montage's segment(s) play an animation shorter than the montage asks for"), Short.Num()),
+				FString::Printf(TEXT("The engine trims a segment back to the animation it names, which leaves the montage shorter than the times written in it and stacks the notifies at the end. Import these at their full length first: %s."), *FString::Join(Short, TEXT(", ")))
+			);
+		}
+
 		for (FAnimNotifyEvent& Notify : Montage->Notifies) {
 			Notify.RefreshSegmentOnLoad();
 			Notify.Link(Montage, Notify.GetTime());
@@ -362,6 +398,27 @@ inline bool ReadAnimationData(USerializerContainer* Container, const bool UseSel
 		for (FCompositeSection& Section : Montage->CompositeSections) {
 			Section.RefreshSegmentOnLoad();
 			Section.Link(Montage, Section.GetTime());
+		}
+
+		/* And whatever still has nowhere to be, said outright. */
+		float Lasts = 0.0f;
+
+		for (const FSlotAnimationTrack& Slot : Montage->SlotAnimTracks) {
+			Lasts = FMath::Max(Lasts, Slot.AnimTrack.GetLength());
+		}
+
+		int32 Past = 0;
+
+		for (const FAnimNotifyEvent& Notify : Montage->Notifies) {
+			if (Notify.GetSegmentIndex() == INDEX_NONE || Notify.GetTime() > Lasts) Past++;
+		}
+
+		if (Past > 0) {
+			FImportIssues::Report(
+				EImportIssue::Data,
+				FString::Printf(TEXT("%d of the montage's %d notifies sit past the end of it"), Past, Montage->Notifies.Num()),
+				FString::Printf(TEXT("The montage plays for %.3fs, and these were written for one longer than that, so the editor draws them stacked at the end."), Lasts)
+			);
 		}
 	}
 

@@ -55,10 +55,7 @@ public:
 	void UE4CloudRegister(FToolBarBuilder& Builder);
 #endif
 
-	/* Checks if Reflection is fit to function */
-	void IsFitToFunction(TFunction<void(bool)> OnResponse);
-	
-	/* Checks if Reflection is fit to function, then called Import */
+	/* Opens the window the paths are typed into */
 	void ImportAction();
 
 	/* Asks for asset paths, or for a JSON file when bypassed */
@@ -69,14 +66,4 @@ public:
 	static TSharedRef<SWidget> CreateCloudMenuDropdown();
 
 	static bool IsToolBarVisible();
-
-protected:
-	/* Wait for Cloud to Initialize */
-	void HandleCloudWaiting();
-
-	FTimerHandle WaitForCloudTimer;
-	int32 CloudDotCount = 0;
-
-	void WaitForCloudTimerCallback();
-	void CancelWaitForCloudTimer();
 };

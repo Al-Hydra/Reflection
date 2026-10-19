@@ -22,6 +22,7 @@
 #include "Components/BrushComponent.h"
 #include "Engine/Brush.h"
 #include "Engine/Properties.h"
+#include "MovieSceneSection.h"
 #include "Particles/ParticleEmitter.h"
 #include "Particles/ParticleLODLevel.h"
 #include "Particles/ParticleSystem.h"
@@ -33,7 +34,10 @@
 #endif
 #include "Engine/StaticMesh.h"
 #include "MeshDescription.h"
+/* Split out into StaticMeshDescription in 4.24; before that the attributes are named by hand */
+#if !UE4_23_BELOW
 #include "StaticMeshAttributes.h"
+#endif
 #include "StaticMeshResources.h"
 #include "Misc/Parse.h"
 #include "Settings/Runtime.h"
@@ -64,14 +68,38 @@ void UObjectSerializer::SetupExports(const TArray<TSharedPtr<FJsonValue>>& InObj
  * the second case: RootComponent0 on a foliage actor is made by the actor's own constructor, and
  * the export naming it is naming the thing that is there rather than asking for another. */
 namespace {
-	UObject* AlreadyThere(UObject* Outer, const FName Named) {
+	UObject* AlreadyThere(UObject* Outer, const FName Named, const UClass* Wanted) {
 		if (Outer == nullptr || Named.IsNone()) return nullptr;
 
-		return StaticFindObjectFast(UObject::StaticClass(), Outer, Named);
+		UObject* Standing = StaticFindObjectFast(UObject::StaticClass(), Outer, Named);
+
+		if (Standing == nullptr) return nullptr;
+
+		/* There under that name, and not the thing the export is talking about. */
+		if (Wanted != nullptr && !Standing->IsA(Wanted)) {
+			MoveToTransientPackageAndRename(Standing);
+
+			return nullptr;
+		}
+
+		return Standing;
 	}
 
 	bool CanBeMade(const UClass* Class, const FString& Named, const FString& Type) {
 		if (Class == nullptr) return false;
+
+		/* A class is found, never made. */
+		if (Class->IsChildOf(UClass::StaticClass())) {
+			UE_LOG(LogReflection, Error, TEXT("\"%s\" is written as a %s and this build has no class of that name, so nothing was made for it"), *Named, *Type);
+
+			FImportIssues::Report(
+				EImportIssue::MissingClass,
+				FString::Printf(TEXT("\"%s\" could not be made"), *Named),
+				FString::Printf(TEXT("The export says it is a %s and this build has no class of that name. What is left to go on names a class rather than an object, and a class is not something that can be made: it would come out with no parent and no default object and take a later compile down with it. Nothing was put in its place and the rest of the import carried on."), *Type)
+			);
+
+			return false;
+		}
 
 		if (!Class->HasAnyClassFlags(CLASS_Abstract)) return true;
 
@@ -87,32 +115,125 @@ namespace {
 	}
 }
 
+namespace {
+	/* The exports part way through being made, innermost last. */
+	TArray<FUObjectExport*> GBeingMade;
+
+	/* Marks one as being made for as long as the call making it is running. */
+	struct FSpawnScope {
+		explicit FSpawnScope(FUObjectExport* InExport) : Export(InExport) { GBeingMade.Add(Export); }
+
+		~FSpawnScope() { GBeingMade.Remove(Export); }
+
+		FUObjectExport* Export;
+	};
+
+	const UClass* GetClassToMake(FUObjectExport* Export) {
+#if ENGINE_UE5
+		/* UE5's CommonUI has no UCommonWidgetSwitcher of its own, so the export resolves to no class at all and
+		   the widget is never made. CommonUILegacy carries the original under its own name, and made as that one
+		   it still behaves the way the asset was authored against. */
+		if (Export->GetType() == TEXT("CommonWidgetSwitcher")) {
+			if (const UClass* LegacyClass = FindClassByType(TEXT("CommonWidgetSwitcherLegacy"))) {
+				return LegacyClass;
+			}
+		}
+#endif
+
+		return Export->GetClass();
+	}
+
+	FString GetObjectNameToMake(FUObjectExport* Export, const UClass* Class) {
+		FString ObjectName = Export->GetName().ToString();
+
+		if (Class->IsChildOf(UWidgetAnimation::StaticClass())) {
+			ObjectName.Split("_INST", &ObjectName, nullptr, ESearchCase::CaseSensitive);
+		}
+
+		return ObjectName;
+	}
+
+	/* Made in the outer its whole path names, and only there.
+	 *
+	 * Nothing is read into it here, and nothing is said when it cannot be made: the call further up
+	 * that is making it does both, and finding an object already there it only fills it in. */
+	void MakeAheadOfOuter(FUObjectExportContainer* Container, FUObjectExport* Export) {
+		const UClass* Class = GetClassToMake(Export);
+
+		if (Container == nullptr || Class == nullptr) return;
+		if (Class->IsChildOf(UClass::StaticClass()) || Class->HasAnyClassFlags(CLASS_Abstract)) return;
+
+		const TArray<FName> TreeSegments = Export->GetOuterTreeSegments(true);
+
+		if (TreeSegments.Num() == 0) return;
+
+		const FUObjectExport* OuterExport = Container->FindByTreeSegment(TreeSegments);
+		UObject* ObjectOuter = OuterExport->IsJsonValid() ? OuterExport->Object : nullptr;
+
+		if (ObjectOuter == nullptr) return;
+		if (Class->ClassWithin != nullptr && !ObjectOuter->IsA(Class->ClassWithin)) return;
+
+		const FName Named = StringToName(GetObjectNameToMake(Export, Class));
+
+		if (UObject* Standing = AlreadyThere(ObjectOuter, Named, Class)) {
+			Export->Object = Standing;
+
+			return;
+		}
+
+		EObjectFlags Flags = RF_Public | RF_Transactional;
+
+		if (Export->Has("Flags")) {
+			Flags = ParseObjectFlags(Export->GetString("Flags"));
+		}
+
+		Export->Object = NewObject<UObject>(ObjectOuter, ToNewObjectClass(Class), Named, Flags);
+	}
+}
+
 UObject* UObjectSerializer::SpawnExport(FUObjectExport* Export, const bool bOnlySerialize) {
+	if (Export == nullptr) return nullptr;
+
+	/* Already being made further up the stack, so what there is of it is all there is to give.
+	 *
+	 * Unless there is nothing of it yet because it is still looking for its outer, and the outer it
+	 * went to make is the one asking. A movie scene makes its sections before its tracks, a section
+	 * makes the track it lives in, and the track's own list of sections names the one that made it:
+	 * handed nothing, the track keeps nothing and the section is never part of it. The outer is
+	 * there by now, so the object is made in it here and left for the call that started it to fill. */
+	if (GBeingMade.Contains(Export)) {
+		if (Export->Object == nullptr) {
+			MakeAheadOfOuter(PropertySerializer->ExportsContainer, Export);
+		}
+
+		return Export->Object;
+	}
+
+	const FSpawnScope BeingMade(Export);
+
 	if (!bOnlySerialize) {
 		if (Export->Object != nullptr) return nullptr;
 	}
 
-	const UClass* Class = Export->GetClass();
+	const UClass* Class = GetClassToMake(Export);
+
 	if (!Class) return nullptr;
 
 	const FString Outer = GetOuterFromObjectOuter(Export->JsonObject->TryGetField(TEXT("Outer")));
 	UObject* ObjectOuter = nullptr;
 
-	/* Find the outer */
-	if (FUObjectExport* OuterExport = PropertySerializer->ExportsContainer->Find(Outer); !Outer.IsEmpty() && OuterExport->JsonObject.IsValid()) {
-		if (OuterExport->Object == nullptr) {
-			SpawnExport(OuterExport);
-		}
-		
-		ObjectOuter = OuterExport->Object;
-	}
+	/* Find the outer using the tree segment
+	 *
+	 * The whole way down first, and the names below only when it misses. A name is not one thing:
+	 * a widget's animations each keep a MovieScene2DTransformTrack_0, and asked by name the first
+	 * of them answers for all. Looking was never harmless either, since what it finds it makes.
+	 * One animation's section made another animation's track that way, which made that one's
+	 * movie scene and then the animation above it from underneath, and the animation asking
+	 * after its own movie scene, still part way made, was given nothing and kept nothing. */
+	const TArray<FName> TreeSegments = Export->GetOuterTreeSegments(true);
 
-	/* Find the blueprint outer */
-	if (!Outer.IsEmpty()) {
-		FString PotentialBPName;
-		Outer.Split("_C", &PotentialBPName, nullptr, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
-		
-		if (FUObjectExport* OuterExport = PropertySerializer->ExportsContainer->Find(PotentialBPName); OuterExport->JsonObject.IsValid() && !IsEmpty(OuterExport->JsonObject->Values)) {
+	if (TreeSegments.Num() > 0) {
+		if (FUObjectExport* OuterExport = PropertySerializer->ExportsContainer->FindByTreeSegment(TreeSegments); OuterExport->IsJsonValid() && !IsEmpty(OuterExport->JsonObject->Values)) {
 			if (OuterExport->Object == nullptr) {
 				SpawnExport(OuterExport);
 			}
@@ -122,16 +243,30 @@ UObject* UObjectSerializer::SpawnExport(FUObjectExport* Export, const bool bOnly
 			}
 		}
 	}
-	
-	/* Find the outer using the tree segment */
-	const TArray<FName> TreeSegments = Export->GetOuterTreeSegments(true);
 
-	if (TreeSegments.Num() > 0) {
-		if (FUObjectExport* OuterExport = PropertySerializer->ExportsContainer->FindByTreeSegment(TreeSegments); OuterExport->IsJsonValid() && !IsEmpty(OuterExport->JsonObject->Values)) {
+	/* Find the outer */
+	const bool bWalkedToOuter = ObjectOuter != nullptr;
+
+	if (!bWalkedToOuter) {
+		if (FUObjectExport* OuterExport = PropertySerializer->ExportsContainer->Find(Outer); !Outer.IsEmpty() && OuterExport->JsonObject.IsValid()) {
 			if (OuterExport->Object == nullptr) {
 				SpawnExport(OuterExport);
 			}
-		
+
+			ObjectOuter = OuterExport->Object;
+		}
+	}
+
+	/* Find the blueprint outer */
+	if (!bWalkedToOuter && !Outer.IsEmpty()) {
+		FString PotentialBPName;
+		Outer.Split("_C", &PotentialBPName, nullptr, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+
+		if (FUObjectExport* OuterExport = PropertySerializer->ExportsContainer->Find(PotentialBPName); OuterExport->JsonObject.IsValid() && !IsEmpty(OuterExport->JsonObject->Values)) {
+			if (OuterExport->Object == nullptr) {
+				SpawnExport(OuterExport);
+			}
+
 			if (OuterExport->Object) {
 				ObjectOuter = OuterExport->Object;
 			}
@@ -149,15 +284,28 @@ UObject* UObjectSerializer::SpawnExport(FUObjectExport* Export, const bool bOnly
 	}
 
 	if (!Export->Object) {
-		FString ObjectName = Export->GetName().ToString();
-
-		if (Class->IsChildOf(UWidgetAnimation::StaticClass())) {
-			ObjectName.Split("_INST", &ObjectName, nullptr, ESearchCase::CaseSensitive);
-		}
-
+		const FString ObjectName = GetObjectNameToMake(Export, Class);
 		const FName Named = StringToName(ObjectName);
 
-		if (UObject* Standing = AlreadyThere(ObjectOuter, Named)) {
+		/* Only made where its kind is allowed to live.
+		 *
+		 * An outer named as a generated class is taken back to the blueprint above, which is right for
+		 * a widget tree and wrong for a function: a function lives in the class, and the engine calls
+		 * one made anywhere else fatal rather than handing it back. That class is the compiler's to
+		 * fill in, so a function the export names is left for it. */
+		if (ObjectOuter != nullptr && Class->ClassWithin != nullptr && !ObjectOuter->IsA(Class->ClassWithin)) {
+			UE_LOG(LogReflection, Error, TEXT("\"%s\" is a %s, which has to live in a %s, and its outer is %s, so nothing was made for it"), *ObjectName, *Class->GetName(), *Class->ClassWithin->GetName(), *ObjectOuter->GetFullName());
+
+			FImportIssues::Report(
+				EImportIssue::Data,
+				FString::Printf(TEXT("\"%s\" could not be made"), *ObjectName),
+				FString::Printf(TEXT("A %s can only be made inside a %s, and the outer this export resolved to is %s. Making it there would stop the editor, so nothing was put in its place and the rest of the import carried on."), *Class->GetName(), *Class->ClassWithin->GetName(), *ObjectOuter->GetFullName())
+			);
+
+			return nullptr;
+		}
+
+		if (UObject* Standing = AlreadyThere(ObjectOuter, Named, Class)) {
 			Export->Object = Standing;
 		} else if (CanBeMade(Class, ObjectName, Export->GetType().ToString())) {
 			Export->Object = NewObject<UObject>(ObjectOuter, ToNewObjectClass(Class), Named, Flags);
@@ -171,6 +319,7 @@ UObject* UObjectSerializer::SpawnExport(FUObjectExport* Export, const bool bOnly
 	}
 	
 	DeserializeObjectProperties(Export->GetProperties(), Export->Object);
+
 
 	if (UParticleEmitter* ParticleEmitter = Cast<UParticleEmitter>(Export->Object)) {
 		ParticleEmitter->EmitterEditorColor = FColor::MakeRandomColor();
@@ -334,7 +483,7 @@ void UObjectSerializer::DeserializeExport(FUObjectExport* Export, TMap<TSharedPt
 		ObjectOuter = Parent;
 	}
 
-	UObject* NewUObject = AlreadyThere(ObjectOuter, FName(*Name));
+	UObject* NewUObject = AlreadyThere(ObjectOuter, FName(*Name), Class);
 
 	if (NewUObject == nullptr) {
 		if (!CanBeMade(Class, Name, Type)) return;
@@ -512,11 +661,23 @@ void UObjectSerializer::DeserializeObjectProperties(const TSharedPtr<FJsonObject
 
 	const UClass* ObjectClass = Object->GetClass();
 
+	/* Watched rather than trusted: reading one property can fetch, compile, and take this object apart underneath the loop */
+	const TWeakObjectPtr<UObject> Alive(Object);
+
 	for (FProperty* Property = ObjectClass->PropertyLink; Property; Property = Property->PropertyLinkNext) {
+		if (!Property->IsValidLowLevel()) continue;
+		
 		FString PropertyName = Property->GetName();
 		if (bOverrideAnimationSkeleton && (PropertyName == TEXT("Skeleton") || PropertyName == TEXT("SkeletonGuid"))) continue;
 
 		if (!PropertySerializer->ShouldDeserializeProperty(Property)) continue;
+
+		/* Gone while something further in was being read, so there is nothing left to read into */
+		if (!Alive.IsValid()) {
+			UE_LOG(LogReflection, Warning, TEXT("\"%s\" was taken apart while its properties were being read, and the rest were left"), *ObjectClass->GetName());
+
+			return;
+		}
 
 		void* PropertyValue = Property->ContainerPtrToValuePtr<void>(Object);
 		const bool HasHandledProperty = PassthroughPropertyHandler(Property, PropertyName, PropertyValue, Properties, PropertySerializer);
@@ -554,11 +715,109 @@ void UObjectSerializer::DeserializeObjectProperties(const TSharedPtr<FJsonObject
 		}
 	}
 	
+	{
+		/* An effect written before the tags moved off it. */
+		static const UClass* Effects = nullptr;
+
+		if (Effects == nullptr) {
+			Effects = FindObject<UClass>(nullptr, TEXT("/Script/GameplayAbilities.GameplayEffect"));
+		}
+
+		if (Effects != nullptr && Object != nullptr && Object->IsA(Effects) && Object->HasAnyFlags(RF_ClassDefaultObject)) {
+			/* The version is left out of the reflected data, and nought predates every upgrade */
+			const FStructProperty* Stamped = FindFProperty<FStructProperty>(Effects, TEXT("DataVersion"));
+
+			if (Stamped != nullptr && Stamped->Struct != nullptr && Stamped->Struct->GetFName() == TEXT("GameplayEffectVersion")) {
+				*Stamped->ContainerPtrToValuePtr<uint8>(Object) = 0;
+
+				/* A component reaches the effect it belongs to through its outer and nothing else */
+				if (const FArrayProperty* Parts = FindFProperty<FArrayProperty>(Effects, TEXT("GEComponents"))) {
+					if (const FObjectPropertyBase* Each = CastField<FObjectPropertyBase>(Parts->Inner)) {
+						FScriptArrayHelper Held(Parts, Parts->ContainerPtrToValuePtr<void>(Object));
+
+						for (int32 At = 0; At < Held.Num(); ++At) {
+							UObject* Part = Each->GetObjectPropertyValue(Held.GetRawPtr(At));
+
+							if (Part == nullptr || Part->GetTypedOuter(const_cast<UClass*>(Effects)) == Object) continue;
+
+							UE_LOG(LogReflection, Display, TEXT("\"%s\" was kept outside the effect whose list it is in, and was moved under it"), *Part->GetName());
+
+							Part->Rename(nullptr, Object, REN_DontCreateRedirectors | REN_NonTransactional);
+						}
+					}
+				}
+
+				/* Told the default object is settled, which is when the upgrade runs */
+#if ENGINE_UE5
+				/* Only where there is an effect this one was made from. */
+				const UObject* Made = Object->GetArchetype();
+
+				if (Made != nullptr && Made != Object && Made->IsA(Effects)) {
+					FPostCDOCompiledContext Brought;
+
+					Object->PostCDOCompiled(Brought);
+				} else {
+					FImportIssues::Report(
+						EImportIssue::Data,
+						FString::Printf(TEXT("\"%s\" was not brought forward"), *Object->GetName()),
+						TEXT("An effect keeps its tags in the old places and the engine moves them into components of their own, reading the effect this one was made from as it goes. That one is not settled yet, which happens where a reference opened this import partway through another. The tags are left where they were, so the effect grants none of them, and importing it on its own will bring them forward.")
+					);
+				}
+#endif
+			}
+		}
+	}
+
+	{ /* PaperSprite handles */
+		static const UClass* Sprites = FindObject<UClass>(nullptr, TEXT("/Script/Paper2D.PaperSprite"));
+
+		if (Sprites != nullptr && Object != nullptr && Object->IsA(Sprites)) {
+			UObject* Cut = Object;
+
+			const FObjectPropertyBase* Sheet = FindFProperty<FObjectPropertyBase>(Sprites, TEXT("BakedSourceTexture"));
+			const FSoftObjectProperty* From = FindFProperty<FSoftObjectProperty>(Sprites, TEXT("SourceTexture"));
+			const FStructProperty* BakedAt = FindFProperty<FStructProperty>(Sprites, TEXT("BakedSourceUV"));
+			const FStructProperty* At = FindFProperty<FStructProperty>(Sprites, TEXT("SourceUV"));
+			const FStructProperty* BakedBig = FindFProperty<FStructProperty>(Sprites, TEXT("BakedSourceDimension"));
+			const FStructProperty* Big = FindFProperty<FStructProperty>(Sprites, TEXT("SourceDimension"));
+
+			const UScriptStruct* Flat = TBaseStructure<FVector2D>::Get();
+
+			const bool bKnown = Sheet != nullptr && From != nullptr
+				&& At != nullptr && BakedAt != nullptr && At->Struct == Flat && BakedAt->Struct == Flat
+				&& Big != nullptr && BakedBig != nullptr && Big->Struct == Flat && BakedBig->Struct == Flat;
+
+			if (bKnown) {
+				UObject* Texture = Sheet->GetObjectPropertyValue_InContainer(Cut);
+
+				/* Only where the question is missing: a build that kept it knows better */
+				const bool bAsked = !From->GetPropertyValue_InContainer(Cut).IsNull();
+
+				/* And only what the question is allowed to hold */
+				const bool bFits = Texture != nullptr && From->PropertyClass != nullptr && Texture->IsA(From->PropertyClass);
+
+				if (!bAsked && bFits) {
+					From->SetPropertyValue_InContainer(Cut, FSoftObjectPtr(Texture));
+
+					At->Struct->CopyScriptStruct(At->ContainerPtrToValuePtr<void>(Cut), BakedAt->ContainerPtrToValuePtr<void>(Cut));
+					Big->Struct->CopyScriptStruct(Big->ContainerPtrToValuePtr<void>(Cut), BakedBig->ContainerPtrToValuePtr<void>(Cut));
+				}
+			}
+		}
+	}
+
 	if (Cast<UStaticMeshComponent>(Object)
 		|| Cast<UParticleSystem>(Object)
 		|| Cast<UParticleLODLevel>(Object)
 		|| Cast<UParticleModule>(Object)
-		|| Cast<UParticleEmitter>(Object)) {
+		|| Cast<UParticleEmitter>(Object)
+		/* A section keeps its keys in channels, and which channels it has is worked out from what
+		 * it was just told rather than declared. A vector section made from nothing has none: it is
+		 * constructed using no channels at all and builds however many it turns out to use when it
+		 * is told, which is here. Left untold the keys are all in the object and the editor is
+		 * looking at a section that says it has nowhere to keep any, so the track draws empty over
+		 * a full set of them. */
+		|| Cast<UMovieSceneSection>(Object)) {
 		Object->PostEditImport();
 	}
 

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 
 class UEdGraph;
+class UEdGraphPin;
 class UK2Node_VariableGet;
 
 /* A tidying, run over a graph once it has been laid out.

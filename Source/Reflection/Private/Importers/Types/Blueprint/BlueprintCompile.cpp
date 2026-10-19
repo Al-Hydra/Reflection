@@ -83,13 +83,19 @@ bool CompileBlueprintGuarded(UBlueprint* Blueprint, const EBlueprintCompileOptio
 
 	DropSlowTasksTo(Depth);
 
-	UE_LOG(LogReflection, Error, TEXT("\"%s\" could not be compiled and the asset was left as it is"), *Named);
+	/* Kept off disk, because what is here cannot be read back. */
+	if (UPackage* Held = Blueprint->GetOutermost()) {
+		Held->SetDirtyFlag(false);
+		Held->SetFlags(RF_Transient);
+	}
+
+	UE_LOG(LogReflection, Error, TEXT("\"%s\" could not be compiled and nothing was written for it"), *Named);
 
 	FImportIssues::Report(
 		EImportIssue::Data,
 		FString::Printf(TEXT("\"%s\" could not be compiled"), *Named),
 		FString::Printf(
-			TEXT("The blueprint was built from the export and the compiler could not read it back. That is the asset being wrong in a way nothing here checked for, most often a class it says it comes from or a type it names being something this engine hasn't got. '%s' is in the project but is not usable, and anything importing alongside it carried on."),
+			TEXT("The blueprint was built from the export and the compiler could not read it back. That is the asset being wrong in a way nothing here checked for, most often a class it says it comes from or a type it names being something this engine hasn't got. What a compile leaves half built cannot be read back either, so nothing was written for '%s' rather than leaving a package that stops the editor whenever anything opens it. Everything importing alongside it carried on."),
 			*Named)
 	);
 

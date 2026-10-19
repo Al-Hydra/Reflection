@@ -29,11 +29,11 @@ public:
 		/* If the Cloud is ready for requests */
 		static void IsReady(TFunction<void(bool)> OnResponse);
 
+		/* Says the Cloud isn't running, with the link to the setup */
+		static void NotifyNotRunning();
+
 		/* If the app is not ready or not opened, show the user a notification */
 		static void Check(TFunction<void(bool)> OnResponse);
-
-		/* Should we wait until the app is initialized? */
-		static bool ShouldWaitUntilInitialized();
 	};
 
 public:
@@ -79,7 +79,7 @@ public:
 		/* Asks the export endpoint for bytes rather than json, with ContentType picking the
 		 * encoding. False when the Cloud couldn't produce the payload, which it says by answering
 		 * with json instead. */
-		static bool GetBinaryBlocking(const FString& Path, const FString& ContentType, TArray<uint8>& OutData);
+		static bool GetBinaryBlocking(const FString& Path, const FString& ContentType, TArray<uint8>& OutData, const FString& Named = FString());
 
 		/* Alternate skin weights, one entry per profile. Not properties, so not in the export:
 		 * they live in the LOD's cooked override tables. Empty for anything without them. */

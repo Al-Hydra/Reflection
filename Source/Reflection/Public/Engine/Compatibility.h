@@ -535,6 +535,58 @@ inline FStaticMeshRenderData* GetStaticMeshRenderData(UStaticMesh* Mesh) {
 #endif
 }
 
+/* 4.24 gathered the attributes a static mesh is described with into FStaticMeshAttributes. Before
+ * that the same attributes are reached by name, so the accessors the importers ask for are spelled
+ * back onto the description they already sit on. */
+#if UE4_23_BELOW
+#include "MeshDescription.h"
+#include "MeshAttributes.h"
+
+struct FStaticMeshAttributes {
+	explicit FStaticMeshAttributes(FMeshDescription& InMeshDescription) : MeshDescription(InMeshDescription) {}
+
+	void Register() const { UStaticMesh::RegisterMeshAttributes(MeshDescription); }
+
+	TVertexAttributesRef<FVector> GetVertexPositions() const {
+		return MeshDescription.VertexAttributes().GetAttributesRef<FVector>(MeshAttribute::Vertex::Position);
+	}
+
+	TVertexInstanceAttributesRef<FVector> GetVertexInstanceNormals() const {
+		return MeshDescription.VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Normal);
+	}
+
+	TVertexInstanceAttributesRef<FVector> GetVertexInstanceTangents() const {
+		return MeshDescription.VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Tangent);
+	}
+
+	TVertexInstanceAttributesRef<float> GetVertexInstanceBinormalSigns() const {
+		return MeshDescription.VertexInstanceAttributes().GetAttributesRef<float>(MeshAttribute::VertexInstance::BinormalSign);
+	}
+
+	TVertexInstanceAttributesRef<FVector4> GetVertexInstanceColors() const {
+		return MeshDescription.VertexInstanceAttributes().GetAttributesRef<FVector4>(MeshAttribute::VertexInstance::Color);
+	}
+
+	TVertexInstanceAttributesRef<FVector2D> GetVertexInstanceUVs() const {
+		return MeshDescription.VertexInstanceAttributes().GetAttributesRef<FVector2D>(MeshAttribute::VertexInstance::TextureCoordinate);
+	}
+
+	TPolygonGroupAttributesRef<FName> GetPolygonGroupMaterialSlotNames() const {
+		return MeshDescription.PolygonGroupAttributes().GetAttributesRef<FName>(MeshAttribute::PolygonGroup::ImportedMaterialSlotName);
+	}
+
+private:
+	FMeshDescription& MeshDescription;
+};
+#endif
+
+/* The sub input node became the linked input pose node in 4.24, under the same shape */
+#if UE4_23_BELOW
+#include "AnimGraphNode_SubInput.h"
+
+using UAnimGraphNode_LinkedInputPose = UAnimGraphNode_SubInput;
+#endif
+
 inline UClass* FindClassByType(const FString& Type) {
 #if UE5_1_BEYOND
 	UClass* Class = FindFirstObject<UClass>(*Type);

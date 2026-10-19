@@ -15,6 +15,7 @@
 #include "Engine/SubsurfaceProfile.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "Settings/ReflectionSettings.h"
+#include "Settings/SettingsAccess.h"
 #include "Dom/JsonObject.h"
 
 #include "Engine/FontFace.h"
@@ -277,11 +278,16 @@ bool FAssetUtilities::ConstructAsset(const FString& Path, const FString& RealPat
 	 * The asset itself exists by this point, since it is created before its graph is filled in, so
 	 * what is in memory is what the reference wants. It is handed back half built and the import
 	 * that owns it finishes it. */
-	if (!bImportReferences && Type != TEXT("Skeleton")) {
+	/* The switch is for a run that turns them off, the setting for somebody who wants only what they asked for */
+	if ((!bImportReferences || !GetSettings()->AssetSettings.ImportReferences) && Type != TEXT("Skeleton")) {
 		return false;
 	}
 
 	const bool IsTexture = FTextureTypes::IsSupported(Type);
+
+	/* A kind of thing nothing can actually be. */
+	const UClass* Meant = FindClassByType(Type);
+	const bool bUnknowable = Meant != nullptr && (Meant->HasAnyClassFlags(CLASS_Abstract) || Meant == UClass::StaticClass());
 
 	const FConstructionScope ConstructionScope(Path);
 
@@ -295,7 +301,7 @@ bool FAssetUtilities::ConstructAsset(const FString& Path, const FString& RealPat
 	 * So the question is not whether the file is open. It is whether the run holding it open builds
 	 * this, which is the same question the reader asks of every export it is offered. Asked the same
 	 * way here, a type nobody has taught the reader about still gets fetched rather than dropped. */
-	if (!ConstructionScope.bOwned && CanImport(Type)) {
+	if (!ConstructionScope.bOwned && (CanImport(Type) || bUnknowable)) {
 		OutObject = FindByReference<T>(RealPath);
 		bSuccess = OutObject != nullptr;
 
@@ -320,7 +326,7 @@ bool FAssetUtilities::ConstructAsset(const FString& Path, const FString& RealPat
 	FString GamePath = Path;
 
 	/* Supported Assets */
-	if (CanImport(Type, true) || IsTexture) {
+	if (CanImport(Type, true) || IsTexture || bUnknowable) {
 		if (IsTexture) {
 			UTexture* Texture = nullptr;
 
@@ -331,6 +337,7 @@ bool FAssetUtilities::ConstructAsset(const FString& Path, const FString& RealPat
 		}
 
 		const TSharedPtr<FJsonObject> Response = Cloud::Export::GetRawBlocking(Path);
+
 		if (Response == nullptr || Path.IsEmpty()) return true;
 
 		if (Response->HasField(TEXT("errored"))) {

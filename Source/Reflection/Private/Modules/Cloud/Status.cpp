@@ -40,25 +40,32 @@ void Cloud::Status::IsReady(TFunction<void(bool)> OnResponse) {
 	);
 }
 
+/* Said the same way wherever the Cloud turns out not to be running, link to the setup and all */
+void Cloud::Status::NotifyNotRunning() {
+	RemoveNotification(CloudNotification);
+
+	CloudNotification = AppendNotificationWithHandler(
+		FText::FromString("No Active Cloud Instance"),
+		FText::FromString("Read documentation on how to start one."),
+		0.5f,
+		FReflectionStyle::Get().GetBrush("Toolbar.Icon"),
+		SNotificationItem::CS_None,
+		false,
+		0.0f,
+		[](FNotificationInfo& Info) {
+			Info.HyperlinkText = FText::FromString("Learn how to setup");
+			Info.Hyperlink = FSimpleDelegate::CreateStatic([]() {
+				LaunchURL(GitHub::README::Cloud);
+			});
+		}
+	);
+}
+
 void Cloud::Status::Check(TFunction<void(bool)> OnResponse) {
 	RemoveNotification(CloudNotification);
 
 	if (!IsOpened()) {
-		CloudNotification = AppendNotificationWithHandler(
-			FText::FromString("No Active Cloud Instance"),
-			FText::FromString("Read documentation on how to start one."),
-			0.5f,
-			FReflectionStyle::Get().GetBrush("Toolbar.Icon"),
-			SNotificationItem::CS_None,
-			false,
-			0.0f,
-			[](FNotificationInfo& Info) {
-				Info.HyperlinkText = FText::FromString("Learn how to setup");
-				Info.Hyperlink = FSimpleDelegate::CreateStatic([]() {
-					LaunchURL(GitHub::README::Cloud);
-				});
-			}
-		);
+		NotifyNotRunning();
 
 		OnResponse(false);
 
@@ -68,8 +75,4 @@ void Cloud::Status::Check(TFunction<void(bool)> OnResponse) {
 	IsReady([OnResponse](const bool bReady) {
 		OnResponse(bReady);
 	});
-}
-
-bool Cloud::Status::ShouldWaitUntilInitialized() {
-	return IsOpened();
 }

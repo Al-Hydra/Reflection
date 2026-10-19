@@ -19,6 +19,9 @@ private:
 	static bool Tick(float DeltaTime);
 	static void Show();
 
+	/* Whether now is a moment to ask, with nobody being interrupted */
+	static bool IsQuiet();
+
 #if ENGINE_UE5
 	static FTSTicker::FDelegateHandle Handle;
 #else

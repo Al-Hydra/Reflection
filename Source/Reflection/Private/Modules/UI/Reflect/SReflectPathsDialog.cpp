@@ -12,6 +12,8 @@
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Input/SButton.h"
+#include "Settings/SettingsAccess.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBorder.h"
@@ -199,6 +201,28 @@ void SReflectPathsDialog::Construct(const FArguments& InArgs) {
 				.Text(LOCTEXT("Folder", "Folder"))
 				.ToolTipText(LOCTEXT("FolderTooltip", "Reflect a folder of the game files instead. This closes, and the folder window takes over."))
 				.OnClicked(this, &SReflectPathsDialog::OnFolderClicked)
+			]
+
+			/* Beside the run, since it is decided for the asset in front of somebody. Kept on the page so it stays put. */
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(FMargin(12.0f, 0.0f, 0.0f, 0.0f))
+			[
+				SNew(SCheckBox)
+				.ToolTipText(LOCTEXT("ReferencesTooltip", "Fetch what an asset names as well as the asset. Off, only the paths queued here are built, and everything they refer to is left to whatever the project already has."))
+				.IsChecked_Lambda([] {
+					return GetSettings()->AssetSettings.ImportReferences ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				})
+				.OnCheckStateChanged_Lambda([](const ECheckBoxState NewState) {
+					GetSettings()->AssetSettings.ImportReferences = NewState == ECheckBoxState::Checked;
+					GetSettings()->SaveConfig();
+				})
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("References", "References"))
+					.Margin(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+				]
 			]
 
 			+ SHorizontalBox::Slot()

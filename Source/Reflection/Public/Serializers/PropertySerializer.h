@@ -78,8 +78,11 @@ inline bool PassthroughPropertyHandler(FProperty* Property, const FString& Prope
 			const FString Key = JsonKeyToString(Pair.Key);
 			const TSharedPtr<FJsonValue> Value = Pair.Value;
 
-			/* If it doesn't start with the same property name */
-			if (!Key.StartsWith(PropertyName)) continue;
+			/* Only this property's own keys: the bare name, or the name with an index after it.
+			 * A bare prefix also answers to longer properties that begin with this one's name,
+			 * PrimaryFireSound1P and PrimaryFireSoundFadeOutTime for PrimaryFireSound, and with no
+			 * index of their own those landed on element 0 over the real one. */
+			if (Key != PropertyName && !Key.StartsWith(PropertyName + TEXT("["))) continue;
 
 			/* By default, it should be 0 */
 			int32 CurrentArrayIndex = 0;

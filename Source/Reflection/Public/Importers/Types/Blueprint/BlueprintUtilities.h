@@ -7,6 +7,7 @@
 #include "Engine/EngineUtilities.h"
 #include "Containers/ExportContainer.h"
 #include "Modules/Toolbar/Tools/ImportFromPath.h"
+#include "UObject/CoreRedirects.h"
 
 /* 4.25 and below build this module without the engine's shared PCH (see Reflection.Build.cs),
  * which is where the blueprint function library type used to come in from */
@@ -36,6 +37,27 @@ inline void ReadPropertyReference(const FUObjectJsonValueExport& Property, FStri
 	if (Member.IsEmpty()) {
 		if (const TArray<TSharedPtr<FJsonValue>>* Path = nullptr; Property.JsonObject->TryGetArrayField(TEXT("Path"), Path) && Path->Num() > 0) {
 			Member = (*Path)[Path->Num() - 1]->AsString();
+		}
+	}
+
+	/* Or as the property written out in full beside what holds it: the member is the inner one's
+	 * name, and the struct is its owner. A member of a struct a blueprint declared is said this way,
+	 * and read any other way it names nothing. */
+	if (const TSharedPtr<FJsonObject>* Inner = nullptr; Property.JsonObject->TryGetObjectField(TEXT("Property"), Inner)) {
+		if (Member.IsEmpty()) {
+			(*Inner)->TryGetStringField(TEXT("Name"), Member);
+		}
+
+		const TSharedPtr<FJsonObject>* Holder = nullptr;
+		FString Spelled;
+
+		if (Owner.IsEmpty() && Property.JsonObject->TryGetObjectField(TEXT("Owner"), Holder) && (*Holder)->TryGetStringField(TEXT("ObjectName"), Spelled)) {
+			/* UserDefinedStruct'SomeStruct' -> SomeStruct */
+			if (FString Held; Spelled.Split(TEXT("'"), nullptr, &Held)) {
+				Held.RemoveFromEnd(TEXT("'"));
+
+				Owner = Held;
+			}
 		}
 	}
 
@@ -99,6 +121,16 @@ inline TSubclassOf<UObject> LoadClassFromPath(const FString& ObjectName, const F
 		}
 	}
 
+	/* A class this engine has renamed, which the class redirects say and an object load never looks at */
+	const FCoreRedirectObjectName Named(*FullPath);
+	const FCoreRedirectObjectName Now = FCoreRedirects::GetRedirectedName(ECoreRedirectFlags::Type_Class, Named);
+
+	if (Now != Named) {
+		if (UClass* Renamed = LoadObjectByPath<UClass>(Now.ToString())) {
+			return Renamed;
+		}
+	}
+
 	return nullptr;
 }
 
@@ -119,6 +151,13 @@ inline TSubclassOf<UObject> LoadBlueprintClass(FString& ObjectPath) {
 		
 		if (LoadedBlueprint && LoadedBlueprint->GeneratedClass) {
 			return LoadedBlueprint->GeneratedClass;
+		}
+
+		/* The class it generated, where the blueprint cannot say: answering nothing reads as an asset the project has not got */
+		if (FString Leaf = FullPath; Leaf.Split(TEXT("/"), nullptr, &Leaf, ESearchCase::CaseSensitive, ESearchDir::FromEnd)) {
+			if (UClass* Generated = LoadObjectByPath<UClass>(FullPath + TEXT(".") + Leaf + TEXT("_C"))) {
+				return Generated;
+			}
 		}
 	}
 
@@ -150,7 +189,9 @@ inline UClass* LoadClass(const TSharedPtr<FJsonObject>& SuperStruct) {
 	 * It reaches back as far as it needs to. A parent that is itself a blueprint asks for its own
 	 * parent as it is read, and the chain ends where it meets a class written in C++, which is
 	 * already here and never asked for. */
-	if (TToolImportFromPath::Import(ObjectPath)) {
+	/* Only where the project has not got it: one that is here and did not answer is written over every time anything names it */
+
+	if (!PackageHoldsAsset(ObjectPath) && TToolImportFromPath::Import(ObjectPath)) {
 		return LoadBlueprintClass(ObjectPath);
 	}
 

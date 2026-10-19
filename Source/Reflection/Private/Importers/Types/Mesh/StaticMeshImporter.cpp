@@ -9,7 +9,10 @@
 
 #include "Engine/StaticMesh.h"
 #include "MeshDescription.h"
+/* Split out into StaticMeshDescription in 4.24; before that the attributes are named by hand */
+#if !UE4_23_BELOW
 #include "StaticMeshAttributes.h"
+#endif
 #include "Engine/StaticMeshSocket.h"
 #include "PhysicsEngine/BodySetup.h"
 
@@ -472,6 +475,13 @@ bool IStaticMeshImporter::BuildLod(UStaticMesh* StaticMesh, const FUObjectJsonVa
 	if (ScreenSize > 0.0f) {
 		SourceModel.ScreenSize.Default = ScreenSize;
 	}
+
+	/* 4.24 is where creating a polygon started triangulating it. On 4.23 a polygon carries no
+	 * triangles until it is asked, and committing converts the description to a raw mesh by walking
+	 * exactly those: unasked, every count comes out zero and the LOD is committed empty. */
+#if UE4_23_BELOW
+	MeshDescription->TriangulateMesh();
+#endif
 
 	StaticMesh->CommitMeshDescription(LodIndex);
 

@@ -43,22 +43,6 @@
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #endif
 
-static TWeakPtr<SNotificationItem> WaitingForCloud;
-
-/* When the press that is still waiting on an answer went in, or zero when none is. */
-static double ImportActionStartedAt = 0.0;
-
-/* An answer that hasn't arrived by now isn't coming, and a button that never works again is worse than a second window */
-static constexpr double ImportActionTimeoutSeconds = 60.0;
-
-/* Whether the wait loop below has a status request out. The loop asks every fifth of a second,
- * which is faster than a starting Cloud answers, so without this the answers stack up and each one
- * starts the run again. */
-static bool ReadyCheckPending = false;
-
-/* The button is a readout, not a switch: nothing about it turns the Cloud on or off, because
- * whether the app is running is not this editor's decision to make. Pressed while it is down, the
- * useful thing to do is say where to get one. */
 static void CloudButtonPressed() {
 	if (!Cloud::Status::IsOpened()) {
 		LaunchURL(GitHub::README::Cloud);
@@ -204,9 +188,8 @@ void UReflectionToolbar::RegisterAssetContextMenu() {
 			/* And reached without going through either reflect tool, so the project name the
 			 * exports are resolved against is fetched here too. Asked once for the press rather
 			 * than once for each asset, since the answer is the same either way. */
+			/* Cancelled, which is the reader saying they are done waiting */
 			if (!Cloud::EnsureMetadataBlocking()) {
-				SpawnPrompt("Reflection", "Cloud didn't say which project it has loaded, so paths can't be resolved.");
-
 				return;
 			}
 
@@ -511,105 +494,10 @@ bool UReflectionToolbar::IsToolBarVisible() {
 	return Visible;
 }
 
-void UReflectionToolbar::WaitForCloudTimerCallback() {
-	if (WaitingForCloud.IsValid()) {
-		CloudDotCount = (CloudDotCount + 1) % 4;
-
-		/* Appended rather than formatted: no dots leaves an FString that never allocated, and the
-		 * pointer %s gets out of one of those is null, which prints as "(null)" once every four
-		 * ticks */
-		WaitingForCloud.Pin()->SetText(
-			FText::FromString(TEXT("Establishing Cloud") + FString::ChrN(CloudDotCount, TEXT('.')))
-		);
-	}
-	
-	/* The Cloud was running when the wait started, so it going away now means it stopped or
-	 * restarted underneath us. Dropping the wait without saying so looks exactly like the reflect
-	 * button doing nothing at all. */
-	if (!Cloud::Status::IsOpened()) {
-		CancelWaitForCloudTimer();
-
-		AppendNotification(
-			FText::FromString("Cloud Stopped"),
-			FText::FromString("It went away while starting up. Reflect again once it is running."),
-			4.0f,
-			FReflectionStyle::Get().GetBrush("Toolbar.Icon"),
-			SNotificationItem::CS_Fail,
-			false,
-			310.0f
-		);
-
-		return;
-	}
-
-	if (ReadyCheckPending) {
-		return;
-	}
-
-	ReadyCheckPending = true;
-
-	Cloud::Status::IsReady([this](const bool bReady) {
-		ReadyCheckPending = false;
-
-		if (!bReady) {
-			return;
-		}
-
-		CancelWaitForCloudTimer();
-		ImportAction();
-	});
-}
-
-void UReflectionToolbar::CancelWaitForCloudTimer() {
-	RemoveNotification(WaitingForCloud);
-	GEditor->GetTimerManager()->ClearTimer(WaitForCloudTimer);
-}
-
-void UReflectionToolbar::IsFitToFunction(TFunction<void(bool)> OnResponse) {
-	/* A json file is imported from disk whether or not Cloud is up, so nothing has to be running
-	 * for the run to go ahead. Cloud still answers references while it is open. */
-	if (GetSettings()->UseLocalJson) {
-		OnResponse(true);
-
-		return;
-	}
-
-	Cloud::Status::Check([this, OnResponse](const bool bStatusOk) {
-		if (!bStatusOk) {
-			OnResponse(false);
-
-			return;
-		}
-
-		Cloud::Update([OnResponse](const bool bUpdated) {
-			OnResponse(bUpdated);
-		});
-	});
-}
-
 void UReflectionToolbar::ImportAction() {
-	if (WaitingForCloud.IsValid()) return;
-
-	const double Now = FPlatformTime::Seconds();
-
-	/* A press already on its way in */
-	if (ImportActionStartedAt != 0.0 && Now - ImportActionStartedAt < ImportActionTimeoutSeconds) {
-		return;
-	}
-
-	ImportActionStartedAt = Now;
-
-	IsFitToFunction([this](const bool bAllowed) {
-		ImportActionStartedAt = 0.0;
-
-		if (!bAllowed) {
-			HandleCloudWaiting();
-			
-			return;
-		}
-
-		Import();
-	});
+	/* Straight to the window. Whether Cloud is up is the reader's question once they have said
+	 * what to fetch, so it is asked after Reflect rather than before the window opens. */
+	Import();
 }
 
 void UReflectionToolbar::Import() {
@@ -621,8 +509,6 @@ void UReflectionToolbar::Import() {
 	if (!FImportJob::IsRunning()) {
 		FRRedirects::Clear();
 	}
-
-	CancelWaitForCloudTimer();
 
 	/* A path is the direct way in, and having to export a json first to import something Cloud
 	 * could have fetched is a step that does not need to exist. Built the other way, the file on
@@ -644,25 +530,6 @@ void UReflectionToolbar::Import() {
 	FImportJob::Enqueue(OutFileNames);
 }
 
-void UReflectionToolbar::HandleCloudWaiting() {
-	if (!Cloud::Status::ShouldWaitUntilInitialized() || WaitingForCloud.IsValid()) return;
-	
-	WaitingForCloud =
-		AppendNotificationWithHandler(
-			FText::FromString("Establishing Cloud"),
-			FText::FromString(""),
-			999.0f,
-			FReflectionStyle::Get().GetBrush("Toolbar.Icon"),
-			SNotificationItem::CS_Pending,
-			false,
-			0.0f);
-
-	GEditor->GetTimerManager()->SetTimer(
-		WaitForCloudTimer,
-		FTimerDelegate::CreateUObject(this, &UReflectionToolbar::WaitForCloudTimerCallback),
-		0.2f,
-		true);
-}
 
 TSharedRef<SWidget> UReflectionToolbar::CreateMenuDropdown() {
 	FMenuBuilder MenuBuilder(false, nullptr);

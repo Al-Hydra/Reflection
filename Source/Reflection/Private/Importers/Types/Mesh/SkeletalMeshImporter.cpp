@@ -2,6 +2,7 @@
 
 #include "Importers/Types/Mesh/SkeletalMeshImporter.h"
 #include "Rendering/SkeletalMeshLODImporterData.h"
+#include "Animation/MorphTarget.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "Engine/AssetCompatibility.h"
 #include "Engine/AssetUserData.h"
@@ -53,7 +54,7 @@ namespace {
 	const TArray<UMorphTarget*>& MeshMorphTargets(const USkeletalMesh* Mesh) { return Mesh->MorphTargets; }
 #endif
 
-#if UE4_25_BELOW
+#if UE4_24_BELOW
 	FSkeletalMeshLODModel* MeshLodModel(const USkeletalMesh* Mesh, const int32 Lod) {
 		FSkeletalMeshModel* Model = Mesh->GetImportedModel();
 
@@ -229,10 +230,18 @@ int32 ISkeletalMeshImporter::BuildMorphTargets(USkeletalMesh* SkeletalMesh, cons
 	const FSkeletalMeshModel* ImportedModel = SkeletalMesh->GetImportedModel();
 	if (ImportedModel == nullptr) return 0;
 
-	/* The deltas go into the imported data rather than onto the mesh directly: a build makes the
-	 * morph targets out of what the imported data names, and drops every one it doesn't find
-	 * there. Anything written straight onto the mesh is gone the next time it is built. */
+	/* From 4.24 the deltas go into the imported data rather than onto the mesh directly: a build
+	 * makes the morph targets out of what the imported data names, and drops every one it doesn't
+	 * find there, so anything written straight onto the mesh is gone the next time it is built.
+	 *
+	 * 4.23 keeps no morph data in the imported data and never builds a LOD out of it either: the
+	 * geometry pass lays the models down itself. So there the targets are made here and put on
+	 * the mesh, which is what an importer of that era does. */
 	TSet<FString> Written;
+
+#if UE4_23_BELOW
+	bool bRegistered = false;
+#endif
 
 	for (int32 LodIndex = 0; LodIndex < ImportedModel->LODModels.Num(); ++LodIndex) {
 		/* 5.4 renamed the question. Before it, the same thing is asked of the imported data. */
@@ -247,9 +256,28 @@ int32 ISkeletalMeshImporter::BuildMorphTargets(USkeletalMesh* SkeletalMesh, cons
 
 		if (ImportData.Points.Num() == 0) continue;
 
+#if UE4_23_BELOW
+		/* Every vertex the builder made out of a given cooked one.
+		 *
+		 * A cooked vertex standing on a seam is several vertices in the built model, one per
+		 * corner it was split into, and the morph moves all of them. The map the builder left
+		 * behind says which cooked vertex each of its own came from, so it is read backwards. */
+		const FSkeletalMeshLODModel& LodModel = ImportedModel->LODModels[LodIndex];
+
+		TMultiMap<int32, int32> PointVertices;
+
+		for (int32 Vertex = 0; Vertex < LodModel.MeshToImportVertexMap.Num(); ++Vertex) {
+			const int32 Point = LodModel.MeshToImportVertexMap[Vertex];
+
+			if (Point >= 0) PointVertices.Add(Point, Vertex);
+		}
+
+		if (PointVertices.Num() == 0) continue;
+#else
 		ImportData.MorphTargetNames.Empty();
 		ImportData.MorphTargets.Empty();
 		ImportData.MorphTargetModifiedPoints.Empty();
+#endif
 
 		for (const TSharedPtr<FJsonValue>& MorphValue : *Morphs) {
 			const TSharedPtr<FJsonObject> Morph = MorphValue.IsValid() ? MorphValue->AsObject() : nullptr;
@@ -272,6 +300,61 @@ int32 ISkeletalMeshImporter::BuildMorphTargets(USkeletalMesh* SkeletalMesh, cons
 				if (!Lod->TryGetArrayField(TEXT("SourceIndices"), SourceIndices)) continue;
 				if (!Lod->TryGetArrayField(TEXT("PositionDeltas"), PositionDeltas)) continue;
 
+#if UE4_23_BELOW
+				/* 4.24 is where the imported data started carrying morph targets for a build to make
+				 * them out of. Before it the targets are made here, against the model the geometry pass
+				 * already laid down, and the deltas name that model's own vertices. */
+				TArray<FMorphTargetDelta> Deltas;
+				TSet<uint32> ModifiedPoints;
+
+				Deltas.Reserve(SourceIndices->Num());
+				ModifiedPoints.Reserve(SourceIndices->Num());
+
+				TArray<int32> Vertices;
+
+				for (int32 Delta = 0; Delta < SourceIndices->Num(); ++Delta) {
+					const int32 Point = static_cast<int32>((*SourceIndices)[Delta]->AsNumber());
+
+					if (!ImportData.Points.IsValidIndex(Point)) continue;
+					if (ModifiedPoints.Contains(static_cast<uint32>(Point))) continue;
+
+					ModifiedPoints.Add(static_cast<uint32>(Point));
+
+					const FVector Moved(
+						ReadFloat(PositionDeltas, Delta * 3),
+						ReadFloat(PositionDeltas, Delta * 3 + 1),
+						ReadFloat(PositionDeltas, Delta * 3 + 2)
+					);
+
+					Vertices.Reset();
+					PointVertices.MultiFind(Point, Vertices);
+
+					for (const int32 Vertex : Vertices) {
+						FMorphTargetDelta& One = Deltas.AddDefaulted_GetRef();
+
+						One.PositionDelta = Moved;
+						One.TangentZDelta = FVector::ZeroVector;
+						One.SourceIdx = static_cast<uint32>(Vertex);
+					}
+				}
+
+				if (Deltas.Num() == 0) continue;
+
+				/* One target across every LOD, since a later LOD is the same morph said again */
+				UMorphTarget* MorphTarget = FindObject<UMorphTarget>(SkeletalMesh, *Name);
+
+				if (MorphTarget == nullptr) {
+					MorphTarget = NewObject<UMorphTarget>(SkeletalMesh, FName(*Name));
+				}
+
+				/* A cooked delta says nothing about normals, so the comparison that would keep one for
+				 * moving a normal and nothing else is left off */
+				MorphTarget->PopulateDeltas(Deltas, LodIndex, LodModel.Sections);
+
+				if (!MorphTarget->HasValidData()) continue;
+
+				bRegistered |= SkeletalMesh->RegisterMorphTarget(MorphTarget, false);
+#else
 				/* A shape is the base points with the morph applied, named by the points it moved.
 				 * The two are read side by side, so a point may only be named once. */
 				FSkeletalMeshImportData Shape;
@@ -300,13 +383,22 @@ int32 ISkeletalMeshImporter::BuildMorphTargets(USkeletalMesh* SkeletalMesh, cons
 				ImportData.MorphTargetNames.Add(Name);
 				ImportData.MorphTargets.Add(MoveTemp(Shape));
 				ImportData.MorphTargetModifiedPoints.Add(MoveTemp(ModifiedPoints));
+#endif
 
 				Written.Add(Name);
 			}
 		}
 
+#if !UE4_23_BELOW
 		SaveMeshLodImportedData(SkeletalMesh, LodIndex, ImportData);
+#endif
 	}
+
+#if UE4_23_BELOW
+	/* Only the name to index map: what turns these models into render data is the mesh's own
+	 * PostEditChange, which has not run yet and must be the one to do it. */
+	if (bRegistered) SkeletalMesh->InitMorphTargets();
+#endif
 
 	return Written.Num();
 }

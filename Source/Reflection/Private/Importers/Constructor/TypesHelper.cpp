@@ -6,6 +6,18 @@
 #include "Importers/Constructor/Registry/RegistrationInfo.h"
 #include "Engine/Compatibility.h"
 
+bool ClassIsFormed(const UClass* Class) {
+	if (Class == nullptr) return false;
+
+	/* One a recompile left behind, which the engine replaced and nothing should build on */
+	if (Class->HasAnyClassFlags(CLASS_NewerVersionExists)) return false;
+
+	if (Class->ClassConstructor == nullptr || Class->ClassWithin == nullptr) return false;
+
+	/* The engine's own measure of a class nothing ever finished */
+	return Class->GetStructureSize() >= sizeof(UObject);
+}
+
 bool CanImport(const FString& Type, const bool IsCloud, const UClass* Class) {
 	if (IsCloud) {
 		if (!ImportTypes::Cloud::Allowed(Type)) {

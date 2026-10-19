@@ -7,6 +7,8 @@
 #include "Engine/Notifications.h"
 #include "Modules/UI/StyleModule.h"
 #include "Settings/Static.h"
+#include "Settings/SettingsAccess.h"
+#include "Modules/Cloud/Remote.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -30,6 +32,11 @@ void FReflectionSupport::Register() {
 
 	if (Handle.IsValid()) return;
 
+	/* Switched off, so there is no clock to turn */
+	if (const UReflectionSettings* Settings = GetSettings(); Settings != nullptr && !Settings->ShowSupportPrompt) {
+		return;
+	}
+
 	const FTickerDelegate Delegate = FTickerDelegate::CreateStatic(&FReflectionSupport::Tick);
 
 #if ENGINE_UE5
@@ -52,10 +59,46 @@ void FReflectionSupport::Unregister() {
 }
 
 bool FReflectionSupport::Tick(float DeltaTime) {
-	/* The turn after an ask says nothing, which is what keeps it from being a nag */
-	if (Turn++ % 2 == 0) {
-		Show();
+	/* Switched off while the editor was open, so the clock stops now rather than at the next start */
+	if (const UReflectionSettings* Settings = GetSettings(); Settings != nullptr && !Settings->ShowSupportPrompt) {
+		Handle.Reset();
+
+		return false;
 	}
+
+	/* The turn after an ask says nothing, which is what keeps it from being a nag */
+	if (Turn % 2 != 0) {
+		Turn++;
+
+		return true;
+	}
+
+	/* Not while somebody is in the middle of something. */
+	if (!IsQuiet()) return true;
+
+	Turn++;
+
+	Show();
+
+	return true;
+}
+
+bool FReflectionSupport::IsQuiet() {
+	/* Parked on a wait that is driving Slate itself */
+	if (FBlockingRequestScope::IsActive()) return false;
+
+	/* Something of Reflection's own is already on screen, and nobody is waiting on this one */
+
+	/* [4.26] 	Under the 4.26.2 engine, we don't have access to IsEmpty on a TArray.
+	 *			Getting Max == 0 *should* return the same functionality. */
+	#if !UE4_26
+	if (NotificationBudget::AtCap() || !NotificationBudget::Live.IsEmpty()) return false;
+	#else
+	if (NotificationBudget::AtCap() || NotificationBudget::Live.Max() != 0) return false;
+	#endif
+
+	/* Nobody in front of the editor to read it */
+	if (!FSlateApplication::IsInitialized() || !FSlateApplication::Get().IsActive()) return false;
 
 	return true;
 }

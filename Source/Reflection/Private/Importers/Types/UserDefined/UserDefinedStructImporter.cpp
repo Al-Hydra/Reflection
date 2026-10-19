@@ -86,14 +86,39 @@ bool IUserDefinedStructImporter::Import() {
 
     FStructureEditorUtils::ModifyStructData(UserDefinedStruct);
 
-    if (GetAssetData()->HasTypedField<EJson::Array>(TEXT("ChildProperties"))) {
-        for (const TSharedPtr<FJsonValue>& Property : GetAssetData()->GetArrayField(TEXT("ChildProperties"))) {
-            const TSharedPtr<FJsonObject>& PropertyObject = Property->AsObject();
+    /* The members, however the export happens to say them.
+     *
+     * Written into the struct as a list of descriptions, or named beside it as exports of their
+     * own. Looked for only the first way, a struct said the second comes out with nothing in it:
+     * the editor marks it errored and says it is empty, and every graph that reads a member off it
+     * reads off nothing. */
+    TArray<TSharedPtr<FJsonObject>> Members;
 
-            if (!PropertyObject.IsValid()) continue;
+    for (const TSharedPtr<FJsonObject>& Held : { GetAssetExport(), GetAssetData() }) {
+        if (!Held.IsValid() || !Held->HasTypedField<EJson::Array>(TEXT("ChildProperties"))) continue;
 
-            AddMemberToStruct(UserDefinedStruct, PropertyObject, MemberMetaData);
+        for (const TSharedPtr<FJsonValue>& Property : Held->GetArrayField(TEXT("ChildProperties"))) {
+            if (const TSharedPtr<FJsonObject> Described = Property->AsObject(); Described.IsValid()) {
+                Members.Add(Described);
+            }
         }
+
+        break;
+    }
+
+    /* Named rather than written out, in the order the struct declares them */
+    if (Members.Num() == 0 && GetAssetExport().IsValid() && GetAssetExport()->HasTypedField<EJson::Array>(TEXT("Children"))) {
+        for (const TSharedPtr<FJsonValue>& Named : GetAssetExport()->GetArrayField(TEXT("Children"))) {
+            const FUObjectExport* Held = GetContainer()->GetExportByObjectPath(Named->AsObject());
+
+            if (Held == nullptr || !Held->IsJsonValid()) continue;
+
+            Members.Add(Held->JsonObject);
+        }
+    }
+
+    for (const TSharedPtr<FJsonObject>& Described : Members) {
+        AddMemberToStruct(UserDefinedStruct, Described, MemberMetaData);
     }
 
     /* One compile for the whole layout. Compiling per member reinstances every struct and

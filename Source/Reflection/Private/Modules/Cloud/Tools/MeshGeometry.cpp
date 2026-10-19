@@ -312,7 +312,7 @@ int32 TMeshGeometry::RebuildLodModels(USkeletalMesh* SkeletalMesh, const TShared
 		 * anything that later asks the LOD what it was made from still has an answer. */
 		/* 4.26 moved the imported data off the LOD model and onto the mesh, one version before the
 		 * mesh learned to build a LOD out of it. */
-#if UE4_25_BELOW
+#if UE4_24_BELOW
 		ImportedModel->LODModels[LodIndex].RawSkeletalMeshBulkData.SaveRawMesh(ImportData);
 #else
 		SkeletalMesh->SaveLODImportedData(LodIndex, ImportData);
@@ -401,7 +401,7 @@ int32 TMeshGeometry::RebuildLodModels(USkeletalMesh* SkeletalMesh, const TShared
 
 	/* Otherwise the build hands back the geometry it cached against the old source data */
 	if (RebuiltLods > 0) {
-		SkeletalMesh->InvalidateDeriveDataCacheGUID();
+		InvalidateSkeletalMeshDerivedData(SkeletalMesh);
 	}
 
 	SkeletalMesh->MarkPackageDirty();

@@ -49,6 +49,53 @@ static float ReadKeyFloat(const TArray<TSharedPtr<FJsonValue>>* Values, const in
 	return Values != nullptr && Values->IsValidIndex(Index) ? static_cast<float>((*Values)[Index]->AsNumber()) : 0.0f;
 }
 
+/* The rate a sequence's frames were laid out at, said exactly. */
+static FFrameRate FramesLaidOutAt(const int32 Spans, const float SequenceLength);
+
+/* The rate a sequence was laid out at, which it only answers for itself from UE5 on */
+static FFrameRate LaidOutAt(UAnimSequence* Sequence) {
+#if ENGINE_UE5
+	return Sequence->GetSamplingFrameRate();
+#else
+	return FramesLaidOutAt(Sequence->GetNumberOfFrames() - 1, Sequence->GetPlayLength());
+#endif
+}
+
+static FFrameRate FramesLaidOutAt(const int32 Spans, const float SequenceLength) {
+	if (Spans <= 0 || SequenceLength <= 0.0f) return FFrameRate(30, 1);
+
+	const double Exact = Spans / static_cast<double>(SequenceLength);
+	const int32 Whole = FMath::Max(1, FMath::RoundToInt(Exact));
+
+	if (FMath::IsNearlyEqual(Exact, static_cast<double>(Whole), 0.001)) return FFrameRate(Whole, 1);
+
+	/* Frames over seconds, both as whole numbers, cut down by what the two share */
+	constexpr int64 Tick = 100000;
+
+	int64 Top = static_cast<int64>(Spans) * Tick;
+	int64 Bottom = static_cast<int64>(FMath::RoundToDouble(static_cast<double>(SequenceLength) * Tick));
+
+	if (Bottom <= 0) return FFrameRate(Whole, 1);
+
+	int64 Left = Top;
+	int64 Right = Bottom;
+
+	while (Right != 0) {
+		const int64 Rest = Left % Right;
+
+		Left = Right;
+		Right = Rest;
+	}
+
+	Top /= Left;
+	Bottom /= Left;
+
+	/* And a fraction too big to say is worse than a rate that is nearly right */
+	if (Top > MAX_int32 || Bottom > MAX_int32) return FFrameRate(Whole, 1);
+
+	return FFrameRate(static_cast<int32>(Top), static_cast<int32>(Bottom));
+}
+
 UObject* IAnimSequenceImporter::CreateAsset(UObject* CreatedAsset) {
 	/* Reflecting the same sequence twice lands on the package the first import wrote.
 	 *
@@ -65,7 +112,9 @@ UObject* IAnimSequenceImporter::CreateAsset(UObject* CreatedAsset) {
 #if ENGINE_UE4
 		/* Compression started by the last import can still be running, and it reads the keys this
 		 * is about to throw away */
+#if !UE4_24_BELOW
 		Existing->WaitOnExistingCompression(false);
+#endif
 		Existing->RemoveAllTracks();
 #endif
 
@@ -223,8 +272,9 @@ bool IAnimSequenceImporter::ImportPayload(USkeleton* Skeleton, const TSharedPtr<
 
 	const int32 WrittenTracks = BuildTracks(AnimSequence, Skeleton, Payload);
 
-	UE_LOG(LogReflection, Display, TEXT("\"%s\" built %d track(s) over %d frame(s) against skeleton \"%s\""),
-		*GetAssetName(), WrittenTracks, static_cast<int32>(Payload->GetIntegerField(TEXT("numFrames"))), *Skeleton->GetName());
+	UE_LOG(LogReflection, Display, TEXT("\"%s\" built %d track(s) over %d frame(s), %.4fs at %s, against skeleton \"%s\""),
+		*GetAssetName(), WrittenTracks, static_cast<int32>(Payload->GetIntegerField(TEXT("numFrames"))),
+		AnimSequence->GetPlayLength(), *LaidOutAt(AnimSequence).ToPrettyText().ToString(), *Skeleton->GetName());
 
 	AnimSequence->AuthoredSyncMarkers = AuthoredMarkers;
 	AnimSequence->Notifies = AuthoredNotifies;
@@ -405,9 +455,9 @@ int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton*
 
 	/* The rate the frames were laid out at, which is the sequence's own: the last frame lands on
 	 * the end of it rather than a frame beyond it. */
-	const float FrameRate = SequenceLength > 0.0f && NumFrames > 1
-		? (NumFrames - 1) / SequenceLength
-		: 30.0f;
+	const int32 FrameSpans = FMath::Max(1, NumFrames - 1);
+
+	const FFrameRate FrameRate = FramesLaidOutAt(NumFrames > 1 ? FrameSpans : 0, SequenceLength);
 
 /* 5.2 is where raw animation data moved behind the data model and its controller */
 #if ENGINE_UE5 && ENGINE_MINOR_VERSION >= 2
@@ -416,8 +466,8 @@ int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton*
 	Controller.OpenBracket(NSLOCTEXT("Reflection", "BuildAnimationSequence", "Building animation sequence"), false);
 	Controller.InitializeModel();
 
-	Controller.SetFrameRate(FFrameRate(FMath::RoundToInt(FrameRate), 1), false);
-	Controller.SetNumberOfFrames(FFrameNumber(FMath::Max(1, NumFrames - 1)), false);
+	Controller.SetFrameRate(FrameRate, false);
+	Controller.SetNumberOfFrames(FFrameNumber(FrameSpans), false);
 
 	for (int32 Track = 0; Track < BoneNames.Num(); ++Track) {
 		Controller.AddBoneCurve(BoneNames[Track], false);
@@ -451,16 +501,13 @@ int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton*
 	 * it holds. Emptying it leaves 30fps over a minimum length behind, so the rate is set before
 	 * the length and the length worked back out of it: a length the rate divides exactly is what
 	 * lands the model on the frame count the branch above sets directly. */
-	const int32 KeyRate = FMath::Max(1, FMath::RoundToInt(FrameRate));
-	const int32 FrameSpan = FMath::Max(1, NumFrames - 1);
-
 	IAnimationDataController& Controller = AnimSequence->GetController();
 
 	Controller.OpenBracket(NSLOCTEXT("Reflection", "BuildAnimationSequence", "Building animation sequence"), false);
 	Controller.ResetModel(false);
 
-	Controller.SetFrameRate(FFrameRate(KeyRate, 1), false);
-	Controller.SetPlayLength(static_cast<float>(FrameSpan) / static_cast<float>(KeyRate), false);
+	Controller.SetFrameRate(FrameRate, false);
+	Controller.SetPlayLength(static_cast<float>(FrameRate.AsSeconds(FFrameNumber(FrameSpans))), false);
 
 	for (int32 Track = 0; Track < BoneNames.Num(); ++Track) {
 		Controller.AddBoneTrack(BoneNames[Track], false);

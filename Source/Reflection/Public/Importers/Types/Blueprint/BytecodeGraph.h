@@ -7,11 +7,13 @@
 #include "Importers/Types/Blueprint/MacroPattern.h"
 
 class UEdGraph;
+class UK2Node_FunctionResult;
 class UEdGraphPin;
 class UK2Node;
 class UK2Node_Variable;
 class UK2Node_CallFunction;
 struct FUObjectExportContainer;
+class UObjectSerializer;
 
 /* Builds a graph back out of the bytecode a function was cooked as.
  *
@@ -40,8 +42,11 @@ public:
 	 * address that is is what the event's own function passes to the ubergraph. */
 	void EnterAt(int32 Address, UK2Node* Node, FName Through = NAME_None);
 
+	/* What reads the templates a call names, which are exports of their own with properties to read */
+	void SetObjectSerializer(UObjectSerializer* InObjectSerializer) { ObjectSerializer = InObjectSerializer; }
+
 	/* Says that what the graph reads under one name is what an event was handed under another */
-	void HandOver(const FString& Frame, const FString& Parameter);
+	void HandOver(const FString& Frame, const FString& Parameter, UK2Node* Node);
 
 	/* Says that what the graph reads under one name is a pin of a node it already has.
 	 *
@@ -86,17 +91,38 @@ public:
 	/* The statements it could make nothing of, for reporting what is still missing */
 	const TArray<FString>& GetUnhandled() const { return Unhandled; }
 
+	/* The function a call names, looked up rather than guessed at */
+	static UFunction* ResolveFunction(const FUObjectJsonValueExport& Reference);
+
+	/* A function on a class, by the name the game called it. Renames since are the engine's to
+	 * know, so one it no longer answers to is looked up through them. */
+	static UFunction* FindFunctionOn(const UClass* Class, const FString& Member);
+
 private:
 	/* One statement, as whatever it turns out to be: a node, a value, or nothing at all */
 	struct FValue {
 		UEdGraphPin* Pin = nullptr;
 		FString Literal;
 
+		/* The local it is, where that is worked out by a call not laid down yet */
+		FString Wanted;
+
 		bool IsSet() const { return Pin != nullptr || !Literal.IsEmpty(); }
 	};
 
+	/* Hands a value to a pin, or remembers to once whatever works it out has been placed */
+	void Give(const FValue& What, UEdGraphPin* To);
+
 	/* What an expression says, spelled the same way every time, so the same one is recognised */
 	static FString Canonical(const FUObjectJsonValueExport& Expression);
+
+	/* Which writing of each local written more than once an expression reads, which is what tells
+	 * two readings of it apart */
+	FString Stamp(const FUObjectJsonValueExport& Expression) const;
+	void Gather(const FUObjectJsonValueExport& Expression, TArray<FString>& Saw) const;
+
+	/* How many times each local has been written so far */
+	TMap<FString, int32> Version;
 
 	/* The class a reference stands for, where it names a class's default object rather than an asset */
 	const UClass* ClassNamedBy(const FUObjectJsonValueExport& Expression);
@@ -109,10 +135,14 @@ private:
 	UK2Node* FormatText(const FUObjectJsonValueExport& Expression);
 
 	/* A struct filled a member at a time, laid back out as the one node that makes one */
-	bool FillStruct(const FUObjectJsonValueExport& Statement, const FUObjectJsonValueExport& Variable);
+	bool FillStruct(const FUObjectJsonValueExport& Statement, const FUObjectJsonValueExport& Variable, const FValue& Expression);
 
 	/* A struct written out in full, read back as the text a default is kept in */
 	FString ReadStructConst(const FUObjectJsonValueExport& Expression);
+
+	/* One member of one, spelled the way a struct writes its members out. A pin says where and
+	 * which way round as its numbers alone, and a struct names them, so the two differ. */
+	FString SpellValue(const FProperty* Property, const FUObjectJsonValueExport& Expression);
 
 	/* Keeps what was worked out, where reaching it again costs nothing */
 	void Remember(const FString& Same, const FValue& Value);
@@ -122,6 +152,18 @@ private:
 
 	/* Works out which of the compiler's own names carry a value that never changes */
 	void FindConstants();
+
+	/* Works out which of the compiler's own locals carry an answer a branch decided */
+	void FindAnswers();
+
+	/* Works out which casts the run never went the other way out of */
+	void FindPureCasts();
+
+	/* Lays down the Return a branch was drawn with, and hands it what that branch decided */
+	bool AnswerHere(const FString& Out, const FValue& Expression);
+
+	/* A Return of its own, with the pins every other Return in the graph answers through */
+	class UK2Node_FunctionResult* NewReturn();
 
 	/* Makes the node every matched macro was written as, before anything is laid out */
 	void MakeMacros();
@@ -141,15 +183,14 @@ private:
 	/* The reading itself, of whatever kind of expression it turns out to be */
 	FValue ReadExpression(const FUObjectJsonValueExport& Expression);
 
+	/* Reads a Math Expression back as that node where it can be spelled as one, and nothing where it cannot */
+	FValue ReadMathExpression(const FUObjectJsonValueExport& Expression);
+
+	/* Spells one piece of a Math Expression, gathering what has to come in through a pin */
+	bool SpellMath(const FUObjectJsonValueExport& Expression, FString& Out, TArray<TPair<FString, FUObjectJsonValueExport>>& Inputs);
+
 	/* A call, of any of the four spellings the bytecode has for one */
 	UK2Node* PlaceCall(const FUObjectJsonValueExport& Expression, UEdGraphPin* Target, const UClass* Against = nullptr);
-
-	/* The function a call names, looked up rather than guessed at */
-	static UFunction* ResolveFunction(const FUObjectJsonValueExport& Reference);
-
-	/* A function on a class, by the name the game called it. Renames since are the engine's to
-	 * know, so one it no longer answers to is looked up through them. */
-	static UFunction* FindFunctionOn(const UClass* Class, const FString& Member);
 
 	/* A variable read, as the pin that carries it: a local the compiler made for a pin resolves to
 	 * that pin, anything else is a variable node */
@@ -174,6 +215,12 @@ private:
 
 	/* Whether a name is the compiler's rather than the graph's, and so not the graph's to keep */
 	bool IsMade(const FString& Name) const;
+
+	/* Whether a macro's unclaimed scratch is kept as its Local node: only in the event graph, and only if it persists */
+	bool KeepsTemporary(const FString& Name) const;
+
+	/* The Local node standing for a kept scratch, made the first time it is wanted */
+	UEdGraphPin* Temporary(const FString& Name, const FUObjectJsonValueExport& Property);
 
 	/* Declares a local the function keeps, where it does not have one already */
 	bool EnsureLocal(const FString& Name, const FUObjectJsonValueExport& Property);
@@ -225,8 +272,18 @@ private:
 	/* Everything the asset was read as, for reaching what a call names */
 	FUObjectExportContainer* Container = nullptr;
 
+	/* What reads an export's properties into the object made for it, for the templates a call names */
+	UObjectSerializer* ObjectSerializer = nullptr;
+
 	/* The pin every compiler made local stands for, by the name it was given */
 	TMap<FString, UEdGraphPin*> Locals;
+
+	/* What the function was handed, which it keeps as its own and reads by name */
+	TSet<FString> Handouts;
+
+	/* The macro pin a run reaching a statement arrives at, where that statement is one of a
+	 * macro's other ways in rather than anything of its own */
+	TMap<int32, UEdGraphPin*> Arrivals;
 
 	/* The last node with an execution pin, which the next one follows */
 	UEdGraphPin* Flow = nullptr;
@@ -255,8 +312,15 @@ private:
 	/* What a write answers into, against the property it would have been written to */
 	TMap<FString, UEdGraphPin*> Decided;
 
-	/* The name the graph reads a value under, against the name whoever entered it calls it */
-	TMap<FString, FString> Handed;
+	/* The Return the statement before this one answered through */
+	int32 AnsweredAt = INDEX_NONE;
+	TWeakObjectPtr<UK2Node_FunctionResult> AnsweredWith;
+
+	/* Pins waiting on a local that a call further down the list hands out */
+	TArray<TPair<UEdGraphPin*, FString>> Later;
+
+	/* The name a value is read under, against the event that hands it over */
+	TMap<FString, TPair<TWeakObjectPtr<UK2Node>, FString>> Handed;
 
 	/* The same, where what it stands for is a pin of a node rather than another name. Held as the
 	 * node and the pin's name, since settling the locals lays the graph out again. */
@@ -279,7 +343,7 @@ private:
 	 * A run with nobody in front of it is checking the bytecode comes back the same, and every
 	 * tidying up is one more thing between what was read and what is compared. A run with somebody
 	 * in front of it wants the graph they would have written. */
-	const bool bTidy = !IsRunningCommandlet();
+	const bool bTidy = !IsRunningCommandlet() || FParse::Param(FCommandLine::Get(), TEXT("tidy"));
 
 	/* Something already worked out, and where it was worked out */
 	struct FShared {
@@ -334,10 +398,41 @@ private:
 	 * loop's counter is written again every time round, so it is never one of these. */
 	TSet<FString> Constants;
 
+	/* The ones worked out from themselves: a counter, a total, anything that runs */
+	TSet<FString> Running;
+
+	/* The compiler's scratch the run tests to decide where to go, which is anything kept from one time to the next */
+	TSet<FString> TestedScratch;
+
+	/* The compiler's scratch that is never assigned, only handed by reference to whatever fills it: an array a Local node holds */
+	TSet<FString> HeldScratch;
+
+	/* The Local node each kept scratch was made as */
+	TMap<FString, TWeakObjectPtr<class UK2Node_TemporaryVariable>> Temporaries;
+
 	/* What each of those carries, once the statement that writes it has been read */
 	TMap<FString, FString> Carried;
 
 	bool bLookedForConstants = false;
+
+	/* How often each name is written, which says whether one node wrote it or several */
+	TMap<FString, int32> Writes;
+
+	/* The out parameter each of the compiler's answer locals is handed to, by its name */
+	TMap<FString, FString> Answered;
+
+	bool bLookedForAnswers = false;
+
+	/* The local each pure cast was put in, by which its node is known when it is built */
+	TSet<FString> PureCasts;
+
+	/* And each cast the run went one way or the other out of, which is an impure one whatever kind of cast it is */
+	TSet<FString> ImpureCasts;
+
+	bool bLookedForPureCasts = false;
+
+	/* The local the statement being placed is writing, while its expression is read */
+	FString Writing;
 
 	/* Macros whose bodies are still being laid out, innermost last */
 	TArray<TPair<const FMacroMatch*, UK2Node*>> Open;

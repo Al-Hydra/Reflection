@@ -339,8 +339,14 @@ TSharedPtr<FJsonObject> Cloud::Export::GetStaticMeshBlocking(const FString& Path
 	return Response;
 }
 
-bool Cloud::Export::GetBinaryBlocking(const FString& Path, const FString& ContentType, TArray<uint8>& OutData) {
-	const FReflectionHttpRequest Request = BuildRequest(ExportURL, { { TEXT("path"), Path } }, { { TEXT("content-type"), ContentType } });
+bool Cloud::Export::GetBinaryBlocking(const FString& Path, const FString& ContentType, TArray<uint8>& OutData, const FString& Named) {
+	TMap<FString, FString> Parameters = { { TEXT("path"), Path } };
+
+	if (!Named.IsEmpty()) {
+		Parameters.Add(TEXT("export_name"), Named);
+	}
+
+	const FReflectionHttpRequest Request = BuildRequest(ExportURL, Parameters, { { TEXT("content-type"), ContentType } });
 	Request->SetVerb(TEXT("GET"));
 
 	const FReflectionHttpResponse Response = FRemoteUtilities::ExecuteRequestBlocking(Request);
@@ -412,16 +418,33 @@ static void ApplyMetadata(const TSharedPtr<FJsonObject>& MetadataResponse) {
  * coming down, which is enough to turn the project's own folder into a plugin. One request against
  * a local server, once per press. */
 bool Cloud::EnsureMetadataBlocking() {
-	const FBlockingRequestScope BlockingScope(NSLOCTEXT("Reflection", "AskingCloudMetadata", "Asking Cloud which project it has loaded"));
+	/* Waited for rather than given up on at the first miss */
+	const FBlockingRequestScope BlockingScope(NSLOCTEXT("Reflection", "AskingCloudMetadata", "Waiting for Cloud to say which project it has loaded"));
 
-	const TSharedPtr<FJsonObject> Response = GetBlocking(MetadataURL);
-	if (!Response.IsValid()) {
-		return false;
+	/* Long enough not to hammer a server that is still starting, short enough to feel immediate */
+	constexpr double BetweenTriesSeconds = 0.25;
+
+	for (;;) {
+		if (const TSharedPtr<FJsonObject> Response = GetBlocking(MetadataURL); Response.IsValid()) {
+			ApplyMetadata(Response);
+
+			if (!GReflectionRuntime.Profile.ProjectName.IsEmpty()) {
+				return true;
+			}
+		}
+
+		/* The wait is the reader's to end, which is what the dialog's Cancel is for */
+		const double Until = FPlatformTime::Seconds() + BetweenTriesSeconds;
+
+		while (FPlatformTime::Seconds() < Until) {
+			if (FBlockingRequestScope::Pump()) {
+				return false;
+			}
+
+			/* Spent keeping the editor drawn rather than asleep */
+			FPlatformProcess::Sleep(0.02f);
+		}
 	}
-
-	ApplyMetadata(Response);
-
-	return !GReflectionRuntime.Profile.ProjectName.IsEmpty();
 }
 
 void Cloud::Update(TFunction<void(bool)> OnResponse) {

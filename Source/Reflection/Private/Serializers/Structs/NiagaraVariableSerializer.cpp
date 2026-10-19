@@ -43,11 +43,23 @@ namespace {
 
 		const FString Full = Module.IsEmpty() ? FString() : Module + TEXT(".") + Leaf;
 
+		/* 4.25 gave the type definition an enum naming what it wraps. The number itself is the
+		 * cook's either way, so before that it is compared against what the enum spells. */
+#if UE4_24_BELOW
+		constexpr int32 UnderlyingStruct = 1;
+		constexpr int32 UnderlyingEnum = 2;
+		constexpr int32 UnderlyingClass = 3;
+#else
+		constexpr int32 UnderlyingStruct = FNiagaraTypeDefinition::UT_Struct;
+		constexpr int32 UnderlyingEnum = FNiagaraTypeDefinition::UT_Enum;
+		constexpr int32 UnderlyingClass = FNiagaraTypeDefinition::UT_Class;
+#endif
+
 		int32 Kind = 0;
 
 		(*TypeDef)->TryGetNumberField(TEXT("UnderlyingType"), Kind);
 
-		if (Kind == FNiagaraTypeDefinition::UT_Struct) {
+		if (Kind == UnderlyingStruct) {
 			UScriptStruct* Struct = Full.IsEmpty() ? nullptr : FindObject<UScriptStruct>(nullptr, *Full);
 
 			if (Struct == nullptr) Struct = FindStructByType(Leaf);
@@ -61,14 +73,14 @@ namespace {
 #else
 			OutType = FNiagaraTypeDefinition(Struct);
 #endif
-		} else if (Kind == FNiagaraTypeDefinition::UT_Enum) {
+		} else if (Kind == UnderlyingEnum) {
 			UEnum* Enum = Full.IsEmpty() ? nullptr : FindObject<UEnum>(nullptr, *Full);
 
 			if (Enum == nullptr) Enum = FindEnumByType(Leaf);
 			if (Enum == nullptr) return false;
 
 			OutType = FNiagaraTypeDefinition(Enum);
-		} else if (Kind == FNiagaraTypeDefinition::UT_Class) {
+		} else if (Kind == UnderlyingClass) {
 			UClass* Class = Full.IsEmpty() ? nullptr : FindObject<UClass>(nullptr, *Full);
 
 			if (Class == nullptr) Class = FindClassByType(Leaf);
@@ -95,7 +107,12 @@ void FNiagaraVariableSerializer::Deserialize(UScriptStruct* Struct, void* Struct
 	if (Struct == nullptr || StructData == nullptr || !JsonValue.IsValid()) return;
 
 	if (FNiagaraTypeDefinition Type; ReadType(JsonValue, Type)) {
+/* 4.25 split the name and type of a variable out into a base of its own */
+#if UE4_24_BELOW
+		static_cast<FNiagaraVariable*>(StructData)->SetType(Type);
+#else
 		static_cast<FNiagaraVariableBase*>(StructData)->SetType(Type);
+#endif
 	}
 
 	/* A value the size of the type it is now. One written at another size is a value nothing can

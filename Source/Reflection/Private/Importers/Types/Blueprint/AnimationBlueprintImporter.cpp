@@ -8,7 +8,12 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_VariableGet.h"
+/* Renamed from the sub input node in 4.24 */
+#if UE4_23_BELOW
+#include "AnimGraphNode_SubInput.h"
+#else
 #include "AnimGraphNode_LinkedInputPose.h"
+#endif
 #include "AnimGraphNode_Root.h"
 #include "AnimationGraphSchema.h"
 #include "Animation/BlendProfile.h"
@@ -106,8 +111,14 @@ bool IAnimationBlueprintImporter::Import() {
 	}
 
 	if (!AnimBlueprint) {
-		const TSharedPtr<FJsonObject> SuperStruct = GetAssetData()->GetObjectField(TEXT("SuperStruct"));
-		UClass* ParentClass = LoadClass(SuperStruct);
+		/* Where it says it comes from, asked for the way everything else asks. */
+		TSharedPtr<FJsonObject> Comes = GetSuperStructJsonObject(GetAssetData());
+
+		if (!Comes.IsValid()) {
+			Comes = GetSuperStructJsonObject(GetAssetExport());
+		}
+
+		UClass* ParentClass = Comes.IsValid() ? LoadClass(Comes) : nullptr;
 
 		/* An animation blueprint is built on the class it was written against, and a build without
 		 * that class has nothing to build it on. Making one anyway is asked of the engine, which
@@ -136,7 +147,7 @@ bool IAnimationBlueprintImporter::Import() {
 	/* The variables the blueprint declares have to exist before the class default object below can
 	 * put anything in them. ChildProperties holds them alongside the anim graph node state, which
 	 * FBlueprintVariables filters out. */
-	if (FBlueprintVariables::Construct(AnimBlueprint, FBlueprintVariables::GetDeclared(GetAssetExport(), GetContainer())) > 0) {
+	if (FBlueprintVariables::Construct(AnimBlueprint, FBlueprintVariables::GetDeclared(GetAssetExport(), GetContainer()), GetContainer()) > 0) {
 		/* The properties only appear on the generated class once it recompiles */
 		CompileBlueprintGuarded(AnimBlueprint, EBlueprintCompileOptions::SkipGarbageCollection);
 	}
@@ -711,7 +722,7 @@ void IAnimationBlueprintImporter::ReadFolded(const TSharedPtr<FJsonObject>& Node
 
 		if (NodeType == TEXT("AnimGraphNode") || NodeType.IsEmpty()) NodeType = Key;
 
-		const UClass* Class = FindClassByType(NodeType);
+		UClass* Class = FindClassByType(NodeType);
 
 		if (Class == nullptr) continue;
 
@@ -1359,7 +1370,11 @@ void IAnimationBlueprintImporter::ShowBoundPins(const TSharedPtr<FJsonObject>& A
 
 		/* Asked of the node, since a binding can have come from either shape the cook arrives in
 		 * and only the node knows about both */
-		TArray<FName> Says = BoundPinNames(Node);
+		TArray<FName> Says;
+
+#if !UE4_25_BELOW
+		Says = BoundPinNames(Node);
+#endif
 
 		for (const FHandedOver& One : Bindings.FindRef(NodeExport->GetName().ToString())) {
 			Says.AddUnique(One.Member);

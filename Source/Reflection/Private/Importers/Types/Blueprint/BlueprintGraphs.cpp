@@ -3,7 +3,12 @@
 #include "Importers/Types/Blueprint/BlueprintGraphs.h"
 #include "AnimationGraphSchema.h"
 #include "AnimationGraph.h"
+/* Renamed from the sub input node in 4.24 */
+#if UE4_23_BELOW
+#include "AnimGraphNode_SubInput.h"
+#else
 #include "AnimGraphNode_LinkedInputPose.h"
+#endif
 #include "Importers/Types/Blueprint/BlueprintVariables.h"
 #include "Importers/Types/Blueprint/MacroPattern.h"
 
@@ -11,6 +16,7 @@
 #include "Engine/Blueprint.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_Event.h"
+#include "Importers/Types/Blueprint/BytecodeGraph.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -48,10 +54,10 @@ namespace {
 		return Node;
 	}
 
-	/* The name an event node answers to, however it came to be one */
+	/* The name an event node answers to, however it came to be one. */
 	FName CalledBy(const UK2Node_Event* Event) {
-		if (const UK2Node_CustomEvent* Custom = Cast<UK2Node_CustomEvent>(Event)) {
-			return Custom->CustomFunctionName;
+		if (!Event->bOverrideFunction && !Event->CustomFunctionName.IsNone()) {
+			return Event->CustomFunctionName;
 		}
 
 		return Event->EventReference.GetMemberName();
@@ -69,6 +75,9 @@ bool FBlueprintGraphs::IsParameter(const TSharedPtr<FJsonObject>& Property, bool
 	Spelled.ParseIntoArray(Named, TEXT("|"), true);
 
 	bool bParameter = false;
+	bool bOut = false;
+	bool bByReference = false;
+	bool bReturned = false;
 
 	for (FString& Flag : Named) {
 		Flag.TrimStartAndEndInline();
@@ -76,8 +85,22 @@ bool FBlueprintGraphs::IsParameter(const TSharedPtr<FJsonObject>& Property, bool
 		/* Read whole rather than looked for inside another, since a value the compiler holds onto
 		 * is a ConstParm and is nobody's parameter */
 		if (Flag == TEXT("Parm")) bParameter = true;
-		if (Flag == TEXT("OutParm") || Flag == TEXT("ReturnParm")) bOutGivenBack = true;
+		if (Flag == TEXT("OutParm")) bOut = true;
+		if (Flag == TEXT("ReferenceParm")) bByReference = true;
+		if (Flag == TEXT("ReturnParm")) bReturned = true;
 	}
+
+	/* Out and by reference together is something handed in, not handed back.
+	 *
+	 * A parameter taken as a const reference is marked out because that is how the compiler passes
+	 * it, by address rather than by copy, and the caller writes the address in. It is still the
+	 * caller telling the function something. Read as an output it disappears off the front of the
+	 * node and the event ends up with one pin where the game had two, which is a different function
+	 * to anything that calls it.
+	 *
+	 * This is the engine's own rule, from K2Node_FunctionEntry: given back only where it is out and
+	 * not by reference, or where it is the return. */
+	bOutGivenBack = bReturned || (bOut && !bByReference);
 
 	return bParameter;
 }
@@ -249,10 +272,38 @@ UEdGraph* FBlueprintGraphs::Make(UBlueprint* Blueprint, const FString& Name, con
 	if (Graph == nullptr) return nullptr;
 
 
-	/* Answering one the parent already declares is that function's signature rather than a new one,
-	 * and the entry node is laid out from it */
-	if (UFunction* Answered = Blueprint->ParentClass != nullptr ? Blueprint->ParentClass->FindFunctionByName(*Name) : nullptr) {
-		FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, Graph, true, Answered);
+	/* Answering one that already exists is that function's signature rather than a new one, and the
+	 * entry node is laid out from it.
+	 *
+	 * Which one it answers is said outright: a function that overrides another carries it as its
+	 * super struct, naming the class it was declared on and what it is called there. Looked for on
+	 * the parent by name alone instead, one declared somewhere the parent chain does not reach in
+	 * this engine comes back as nothing, and what gets made is a new function under a name the
+	 * class already has: the compiler then has two of them, disagreeing about their parameters and
+	 * about who may call them, and says so four times over.
+	 *
+	 * Not user created, whatever else it is. That is what tells the editor this is an override, and
+	 * a graph marked as made by hand is given public access on top of whatever the parent said,
+	 * which the compiler refuses against a parent that is protected. */
+	UFunction* Answered = nullptr;
+
+	if (Function.Has(TEXT("SuperStruct"))) {
+		Answered = FBytecodeGraph::ResolveFunction(Function.GetObject(TEXT("SuperStruct")));
+	}
+
+	if (Answered == nullptr && Blueprint->ParentClass != nullptr) {
+		Answered = Blueprint->ParentClass->FindFunctionByName(*Name);
+	}
+
+	/* Said as the class it was declared on rather than as the function.
+	 *
+	 * Both are taken, and they do not mean the same thing. Given the function, the entry names it
+	 * as one of the blueprint's own and the reference is left without a class behind it; the
+	 * compiler then goes looking for anything of that name on the parent, finds the one being
+	 * overridden, and calls the name taken. Given the class, the entry names it as that class's,
+	 * which is what an override is and what the editor's own Override Function hands over. */
+	if (Answered != nullptr) {
+		FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, Graph, false, Answered->GetOwnerClass());
 
 		return Graph;
 	}

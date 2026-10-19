@@ -8,7 +8,6 @@
 #include "Utilities/Dialog.h"
 
 #include "Animation/AnimSequence.h"
-#include "AssetRegistry/AssetData.h"
 #include "PropertyCustomizationHelpers.h"
 
 #include "Framework/Application/SlateApplication.h"

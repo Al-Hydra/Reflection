@@ -14,6 +14,7 @@ struct ImportTypes {
 
 	static inline TArray<FString> Experimental = {
 		"AnimBlueprintGeneratedClass",
+		"World",
 		"BlueprintGeneratedClass",
 		"WidgetBlueprintGeneratedClass"
 	};

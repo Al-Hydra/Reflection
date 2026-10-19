@@ -44,12 +44,12 @@ struct REFLECTION_API FBlueprintVariables {
 	static TSet<FString> GetWidgetVariables(FUObjectExportContainer* Container);
 
 	/* Adds a member variable for every user facing ChildProperty, returns how many were added */
-	static int32 Construct(UBlueprint* Blueprint, const TArray<TSharedPtr<FJsonValue>>& ChildProperties);
+	static int32 Construct(UBlueprint* Blueprint, const TArray<TSharedPtr<FJsonValue>>& ChildProperties, FUObjectExportContainer* Container = nullptr);
 
 	/* Whether a ChildProperty is one the editor would show rather than blueprint plumbing */
 	static bool IsUserVariable(const TSharedPtr<FJsonObject>& Property);
 
 	/* Resolves a ChildProperty to the pin type a blueprint variable is declared with.
 	 * False when the type isn't one that maps onto a blueprint variable. */
-	static bool GetPinType(const TSharedPtr<FJsonObject>& Property, FEdGraphPinType& OutPinType);
+	static bool GetPinType(const TSharedPtr<FJsonObject>& Property, FEdGraphPinType& OutPinType, FUObjectExportContainer* Container = nullptr);
 };

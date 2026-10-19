@@ -49,7 +49,7 @@ namespace {
 		int32 Dot;
 
 		if (Path.FindLastChar(TEXT('.'), Dot)) {
-			Path.LeftInline(Dot);
+			LeftInline(Path, Dot);
 		}
 
 		return Path;
@@ -65,7 +65,7 @@ namespace {
 		int32 Dot;
 
 		if (Path.FindLastChar(TEXT('.'), Dot)) {
-			Path.LeftInline(Dot);
+			LeftInline(Path, Dot);
 		}
 
 		return Path;

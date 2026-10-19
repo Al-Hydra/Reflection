@@ -20,9 +20,8 @@ bool TToolImportFolder::Execute(const FString& InitialFolder, const bool bUseCli
 	}
 
 	/* Nothing here goes through the reflect button, so this is where the project name gets fetched */
+	/* Cancelled, which is the reader saying they are done waiting */
 	if (!Cloud::EnsureMetadataBlocking()) {
-		SpawnPrompt("Reflect Folder", "Cloud didn't say which project it has loaded, so paths can't be resolved.");
-
 		return false;
 	}
 

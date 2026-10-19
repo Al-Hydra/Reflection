@@ -28,3 +28,19 @@ inline FString ToEditorPackagePath(const FString& InPath) {
 
 	return Path;
 }
+
+/* And back the other way, which is the only spelling Cloud answers to */
+inline FString ToCloudPackagePath(const FString& InPath) {
+	FString Path = InPath;
+
+	/* Undone before it is turned back, so a path a redirect moved is asked for where it came from */
+	FRRedirects::Reverse(Path);
+
+	const FString& ProjectName = GReflectionRuntime.Profile.ProjectName;
+
+	if (!ProjectName.IsEmpty() && Path.StartsWith(TEXT("/Game/"))) {
+		Path = ProjectName + TEXT("/Content/") + Path.RightChop(6);
+	}
+
+	return Path;
+}

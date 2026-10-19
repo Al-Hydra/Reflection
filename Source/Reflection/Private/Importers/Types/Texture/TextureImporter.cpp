@@ -9,10 +9,7 @@
 #include "Engine/TextureLightProfile.h"
 #include "Engine/EngineUtilities.h"
 #include "Engine/Log.h"
-#include "HttpModule.h"
-#include "Interfaces/IHttpResponse.h"
 #include "Modules/Cloud/Cloud.h"
-#include "Modules/Cloud/Remote.h"
 #include "Settings/ReflectionSettings.h"
 #include "Utilities/ContentBrowser.h"
 
@@ -40,8 +37,6 @@ bool ITextureImporter<AssetType>::Import() {
 static bool DownloadPixels(const FString& FetchPath, const FString& Type, const TSharedPtr<FJsonObject>& Export, TArray<uint8>& OutData) {
 	const bool UseRawMipData = FTextureTypes::RequiresRawMipData(Type, FTextureTypes::IsVectorDisplacementMap(Export));
 
-	const FReflectionHttpRequest HttpRequest = FHttpModule::Get().CreateRequest();
-
 	/* Which export of the package is wanted, said outright.
 	 *
 	 * The Cloud reads a path as far as the first dot and no further, so a name written on the end of
@@ -52,25 +47,8 @@ static bool DownloadPixels(const FString& FetchPath, const FString& Type, const 
 
 	Export->TryGetStringField(TEXT("Name"), Named);
 
-	HttpRequest->SetURL(Cloud::URL + Cloud::ExportURL + "?path=" + FetchPath
-		+ (Named.IsEmpty() ? TEXT("") : TEXT("&export_name=") + Named));
-	HttpRequest->SetHeader("content-type", UseRawMipData ? "application/octet-stream" : "image/png");
-	HttpRequest->SetVerb(TEXT("GET"));
-
-	const FReflectionHttpResponse HttpResponse = FRemoteUtilities::ExecuteRequestBlocking(HttpRequest);
-
-	if (!HttpResponse.IsValid() || HttpResponse->GetResponseCode() != 200) {
-		return false;
-	}
-
-	/* Cloud answers with json when it couldn't decode the texture, never with pixels */
-	if (HttpResponse->GetContentType().StartsWith("application/json")) {
-		return false;
-	}
-
-	OutData = HttpResponse->GetContent();
-
-	return OutData.Num() > 0;
+	/* Asked through the Cloud so the query is encoded, a + written out reads as a space */
+	return Cloud::Export::GetBinaryBlocking(FetchPath, UseRawMipData ? TEXT("application/octet-stream") : TEXT("image/png"), OutData, Named);
 }
 
 bool FTextureImport::FromCloud(const FString& Path, const FString& FetchPath, UTexture*& OutTexture) {

@@ -390,15 +390,18 @@ IImporter* IImportReader::ReadExportAndImport(FUObjectExportContainer* Container
 		TArray<UObject*> Held;
 		GetObjectsWithOuter(LocalPackage, Held, false);
 
-		if (Export->Object == nullptr && Held.Num() == 0) {
-			LocalPackage->SetDirtyFlag(false);
-			LocalPackage->ClearFlags(RF_Public | RF_Standalone);
+		/* Every package carries one of these built or not, so counting them keeps the empty one */
+		int32 Built = 0;
 
-#if ENGINE_UE5
-			LocalPackage->MarkAsGarbage();
-#else
-			LocalPackage->MarkPendingKill();
-#endif
+		for (const UObject* One : Held) {
+			if (One != nullptr && !One->IsA<UMetaData>()) Built++;
+		}
+
+		/* Only taken off the list of things to save. Thrown away instead, the name stays taken by a
+		 * package nothing can be saved into, so the next import of it builds the asset, hands it to
+		 * a package already condemned, and the asset is collected out from under the save. */
+		if (Export->Object == nullptr && Built == 0) {
+			LocalPackage->SetDirtyFlag(false);
 		}
 	}
 

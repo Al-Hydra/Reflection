@@ -6,28 +6,17 @@
 #include "Importers/Constructor/ImportIssues.h"
 #include "Importers/Constructor/ImportReader.h"
 #include "Importers/Types/Texture/TextureImporter.h"
+#include "Importers/Types/World/LevelRead.h"
+#include "Importers/Types/World/LevelRead.h"
 #include "Importers/Types/Texture/TextureTypes.h"
 #include "Modules/Cloud/Cloud.h"
 #include "Modules/Cloud/Remote.h"
 #include "Modules/Toolbar/Tools/ImportFolder.h"
 #include "Modules/UI/Reflect/SReflectPathsDialog.h"
 #include "Engine/EngineUtilities.h"
-#include "Utilities/Dialog.h"
 
 void TToolImportFromPath::Execute() {
-	if (!Cloud::Status::IsOpened()) {
-		SpawnPrompt("Reflection", "Cloud isn't running, so there is nowhere to fetch from.");
-
-		return;
-	}
-
-	/* Nothing here goes through the reflect button, so this is where the project name gets fetched */
-	if (!Cloud::EnsureMetadataBlocking()) {
-		SpawnPrompt("Reflection", "Cloud didn't say which project it has loaded, so paths can't be resolved.");
-
-		return;
-	}
-
+	/* Nothing is asked of Cloud to put a list together, so it is not asked for until Reflect is */
 	TArray<FString> Paths;
 
 	/* The two windows hand back and forth, so this goes round rather than opening one inside the
@@ -55,6 +44,18 @@ void TToolImportFromPath::Execute() {
 		}
 
 		break;
+	}
+
+	/* Asked for now the reader has said go, rather than for the window to open */
+	if (!Cloud::Status::IsOpened()) {
+		Cloud::Status::NotifyNotRunning();
+
+		return;
+	}
+
+	/* Nothing here goes through the reflect button, so this is where the project name gets fetched */
+	if (!Cloud::EnsureMetadataBlocking()) {
+		return;
 	}
 
 	int32 Reflected = 0;
@@ -160,6 +161,11 @@ bool TToolImportFromPath::Import(const FString& InPath, const TSet<FString>& All
 		}
 
 		return false;
+	}
+
+	/* A level, which reads into the open level rather than into a package of its own */
+	if (FLevelRead::Handles(Exports)) {
+		return FLevelRead::FromCloud(Exports, PackagePath);
 	}
 
 	if (FTextureTypes::IsSupported(Type)) {

@@ -59,8 +59,8 @@ public:
 	static void Report(EImportIssue Kind, const FString& Summary, const FString& Detail = FString());
 	static void ReportFor(const FString& Name, const FString& Path, const FString& Type, EImportIssue Kind, const FString& Summary, const FString& Detail = FString());
 
-	/* A reference that resolved to nothing, ignored when it names part of the asset being imported */
-	static void ReportUnresolvedReference(const FString& Type, const FString& Name, const FString& Path);
+	/* A reference that resolved to nothing. Within is how it was spelled where it names something inside an asset. */
+	static void ReportUnresolvedReference(const FString& Type, const FString& Name, const FString& Path, const FString& Within = FString());
 
 	/* How many of a thing came across incomplete, said once rather than per entry.
 	 *

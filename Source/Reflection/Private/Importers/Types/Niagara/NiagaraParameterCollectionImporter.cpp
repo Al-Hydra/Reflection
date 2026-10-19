@@ -6,6 +6,43 @@
 
 #include "NiagaraParameterCollection.h"
 
+namespace {
+	/* Every parameter the store holds, and where its bytes sit.
+	 *
+	 * 4.24 gathered the two into one struct and sorted the list, and 4.26 gave the store a reader
+	 * for it. Before either, the store keeps a map from the one to the other, so the same pairs are
+	 * gathered into a list of their own. */
+#if UE4_23_BELOW
+	struct FStoredParameter {
+		FNiagaraVariable Variable;
+		int32 Offset;
+
+		FName GetName() const { return Variable.GetName(); }
+		int32 GetSizeInBytes() const { return Variable.GetSizeInBytes(); }
+	};
+
+	TArray<FStoredParameter> ReadStoredParameters(const FNiagaraParameterStore& Store) {
+		TArray<FStoredParameter> Read;
+
+		Read.Reserve(Store.GetParameterOffsets().Num());
+
+		for (const TPair<FNiagaraVariable, int32>& Parameter : Store.GetParameterOffsets()) {
+			Read.Add(FStoredParameter{ Parameter.Key, Parameter.Value });
+		}
+
+		return Read;
+	}
+#elif UE4_25_BELOW
+	const TArray<FNiagaraVariableWithOffset>& ReadStoredParameters(const FNiagaraParameterStore& Store) {
+		return Store.GetSortedParameterOffsets();
+	}
+#else
+	TArrayView<const FNiagaraVariableWithOffset> ReadStoredParameters(const FNiagaraParameterStore& Store) {
+		return Store.ReadParameterVariables();
+	}
+#endif
+}
+
 void INiagaraParameterCollectionImporter::Repair(UObject* Asset) const {
 	UNiagaraParameterCollection* Collection = Cast<UNiagaraParameterCollection>(Asset);
 
@@ -25,7 +62,7 @@ void INiagaraParameterCollectionImporter::Repair(UObject* Asset) const {
 
 	TMap<FName, TArray<uint8>> Overrides;
 
-	for (const FNiagaraVariableWithOffset& Variable : Store.ReadParameterVariables()) {
+	for (const auto& Variable : ReadStoredParameters(Store)) {
 		const int32 Size = Variable.GetSizeInBytes();
 
 		/* One whose bytes are not all there is left to the parameter's own default rather than read
@@ -63,7 +100,11 @@ void INiagaraParameterCollectionImporter::Repair(UObject* Asset) const {
 
 	/* Ordered the way the store is searched, which is a binary search and answers wrongly on a list
 	 * that is not in that order */
+/* The list is searched by halving it from 4.24 on, which answers wrongly unless it is in that
+ * order. Before that the store is a map and is searched by key. */
+#if !UE4_23_BELOW
 	Store.SortParameters();
+#endif
 
 	UE_LOG(LogReflection, Display, TEXT("\"%s\" laid out %d parameter(s)%s"),
 		*GetAssetName(), Collection->GetParameters().Num(),
@@ -97,7 +138,7 @@ void INiagaraParameterCollectionImporter::Validate(UObject* Asset) const {
 	 * disagreeing with itself, and the engine finds it the moment anything reads that parameter. */
 	int32 Overruns = 0;
 
-	for (const FNiagaraVariableWithOffset& Variable : Store.ReadParameterVariables()) {
+	for (const auto& Variable : ReadStoredParameters(Store)) {
 		if (Variable.Offset < 0 || Variable.Offset + Variable.GetSizeInBytes() > Held) {
 			Overruns++;
 		}
@@ -114,6 +155,6 @@ void INiagaraParameterCollectionImporter::Validate(UObject* Asset) const {
 	}
 
 	UE_LOG(LogReflection, Display, TEXT("\"%s\" carries %d parameter(s) over %d byte(s)%s"),
-		*GetAssetName(), Store.ReadParameterVariables().Num(), Held,
+		*GetAssetName(), ReadStoredParameters(Store).Num(), Held,
 		Overruns > 0 ? TEXT(", not all of which fit") : TEXT(""));
 }

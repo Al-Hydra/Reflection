@@ -67,7 +67,12 @@ UObject* ICurveExpressionImporter::CreateAsset(UObject* CreatedAsset) {
 
 		/* And the controller the graph is edited through, which the blueprint makes on request */
 		if (Made != nullptr) {
+			/* It grew the say-so of whether to tell anyone only after 4.25 */
+#if UE4_25_BELOW
+			Made->InitializeModelIfRequired();
+#else
 			Made->InitializeModelIfRequired(false);
+#endif
 		}
 
 		return IImporter::CreateAsset(Made);

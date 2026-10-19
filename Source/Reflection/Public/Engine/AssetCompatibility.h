@@ -15,6 +15,7 @@
 #include "AssetRegistry/AssetData.h"
 #endif
 #include "Engine/SkeletalMesh.h"
+#include "Rendering/SkeletalMeshModel.h"
 #include "ScopedTransaction.h"
 
 /* SetAnimSequenceLength drives the sequence through its controller from 5.2 on. The old file got
@@ -34,6 +35,39 @@ inline const FReferenceSkeleton& MeshRefSkeleton(const USkeletalMesh* Mesh) {
 	return Mesh->GetRefSkeleton();
 #else
 	return Mesh->RefSkeleton;
+#endif
+}
+
+/* 4.24 gave the editor an object that holds a skeletal mesh's PostEditChange back until a whole
+ * edit is finished. Before it, the mesh is simply told once the scope closes. */
+#if UE4_23_BELOW
+class FScopedSkeletalMeshPostEditChange {
+public:
+	explicit FScopedSkeletalMeshPostEditChange(USkeletalMesh* InMesh) : Mesh(InMesh) {}
+
+	~FScopedSkeletalMeshPostEditChange() {
+		if (Mesh != nullptr) Mesh->PostEditChange();
+	}
+
+private:
+	USkeletalMesh* Mesh;
+};
+#endif
+
+/* Throws away the key the built geometry is cached under, so a rebuild does not hand back what it
+ * made from the old source data. 4.24 put this on the mesh; before that the model it keys off is
+ * asked directly, which is all the newer call does anyway. */
+inline void InvalidateSkeletalMeshDerivedData(USkeletalMesh* Mesh) {
+	if (Mesh == nullptr) return;
+
+#if UE4_23_BELOW
+	/* GenerateNewGUID is not exported on 4.23, and the two members it sets are public */
+	if (FSkeletalMeshModel* Model = Mesh->GetImportedModel()) {
+		Model->SkeletalMeshModelGUID = FGuid::NewGuid();
+		Model->bGuidIsHash = false;
+	}
+#else
+	Mesh->InvalidateDeriveDataCacheGUID();
 #endif
 }
 
@@ -88,6 +122,7 @@ inline void BuildAnimNotifyTracks(UAnimSequenceBase* Sequence) {
 
 	int32 RowCount = Sequence->Notifies.Num() > 0 ? 1 : 0;
 
+
 	for (FAnimNotifyEvent& Notify : Sequence->Notifies) {
 		if (Notify.TrackIndex < 0 || Notify.TrackIndex > 20) {
 			Notify.TrackIndex = 0;
@@ -96,11 +131,24 @@ inline void BuildAnimNotifyTracks(UAnimSequenceBase* Sequence) {
 		RowCount = FMath::Max(RowCount, Notify.TrackIndex + 1);
 	}
 
+	/* A sequence's markers sit on the same rows its notifies do, and name them the same way */
+	if (const UAnimSequence* Marked = Cast<UAnimSequence>(Sequence)) {
+		for (const FAnimSyncMarker& Marker : Marked->AuthoredSyncMarkers) {
+			if (Marker.TrackIndex >= 0 && Marker.TrackIndex <= 20) {
+				RowCount = FMath::Max(RowCount, Marker.TrackIndex + 1);
+			}
+		}
+	}
+
 	while (Sequence->AnimNotifyTracks.Num() < RowCount) {
 		Sequence->AnimNotifyTracks.Add(FAnimNotifyTrack(
 			*FString::FromInt(Sequence->AnimNotifyTracks.Num() + 1),
 			FLinearColor::White
 		));
+	}
+
+	if (Sequence->AnimNotifyTracks.Num() > RowCount) {
+		Sequence->AnimNotifyTracks.SetNum(RowCount);
 	}
 #endif
 }

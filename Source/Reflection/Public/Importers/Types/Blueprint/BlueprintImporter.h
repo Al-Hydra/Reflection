@@ -38,6 +38,9 @@ protected:
 	/* Handles SimpleConstructionScript, the component layout for Actor blueprints */
 	void ConstructScript() const;
 
+	/* Puts back what the blueprint changed about a component it inherited */
+	int32 ConstructOverriddenComponents();
+
 	/* Handles WidgetTree, the UI layout for Widget blueprints */
 	void ConstructWidgetTree();
 
@@ -63,6 +66,12 @@ protected:
 	 * class calls as it plays. The template is the only one of the three the cook keeps, and the
 	 * other two are made from it. */
 	int32 ConstructTimelines();
+
+	/* Puts back the events a widget's animations run, which arrive as plain events and a note */
+	int32 ConstructAnimationEvents();
+
+	/* Puts back the events a blueprint's own widgets and components run, which arrive the same way */
+	int32 ConstructComponentEvents();
 
 	/* What each timeline hands out, by the name the script reads it under: the property a track is
 	 * kept in against the node and pin it was drawn as */

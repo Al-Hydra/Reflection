@@ -10,9 +10,17 @@ void USerializerContainer::Initialize(FUObjectExport* Export, FUObjectExportCont
 	AssetContainer = Container;
 	AssetExport = Export;
 	
-	/* Create Properties field if it doesn't exist */
-	if (!AssetExport->JsonObject->HasField(TEXT("Properties"))) {
-		AssetExport->JsonObject->SetObjectField(TEXT("Properties"), TSharedPtr<FJsonObject>());
+	/* Create Properties field if it doesn't exist.
+	 *
+	 * Made as a real object rather than an empty handle. Setting an object field to a pointer
+	 * holding nothing writes a null into the json, and asking for a null back as an object hands
+	 * out the one empty object the json library keeps for saying no. Everything moved in below is
+	 * then written into that, and it belongs to the process rather than to this export: every
+	 * export after it that has no properties of its own reads another asset's, and what a class
+	 * says it comes from is whatever the last one left in there. Which is why importing one asset
+	 * is fine and importing one that drags in twenty is not. */
+	if (!AssetExport->JsonObject->HasTypedField<EJson::Object>(TEXT("Properties"))) {
+		AssetExport->JsonObject->SetObjectField(TEXT("Properties"), MakeShared<FJsonObject>());
 	}
 
 	/* Move asset properties defined outside "Properties" and move it inside */

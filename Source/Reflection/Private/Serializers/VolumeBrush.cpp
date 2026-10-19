@@ -228,7 +228,14 @@ namespace {
 
 	bool GatherHullFromConvex(const FKConvexElem& Convex, FBrushHull& Hull) {
 		const TArray<FVector>& Points = Convex.VertexData;
+
+/* 4.24 is where a cooked hull started carrying its triangles. Before it only the corners
+ * survive, which is the case the faces below are already worked out from. */
+#if UE4_23_BELOW
+		const TArray<int32> Indices;
+#else
 		const TArray<int32>& Indices = Convex.IndexData;
+#endif
 
 		if (Points.Num() < 4) return false;
 

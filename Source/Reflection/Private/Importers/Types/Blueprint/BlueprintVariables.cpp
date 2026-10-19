@@ -5,10 +5,14 @@
 #include "Engine/EngineUtilities.h"
 #include "Utilities/JsonHelpers.h"
 #include "Containers/ExportContainer.h"
+#include "Engine/Package.h"
+#include "Modules/Toolbar/Tools/ImportFromPath.h"
+#include "Utilities/AssetPaths.h"
 
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "UObject/CoreRedirects.h"
 
 namespace {
 	/* The referenced object of a property field, ex: the Struct of a StructProperty.
@@ -38,13 +42,53 @@ namespace {
 				LeftInline(ObjectPath, Dot);
 			}
 
-			if (T* Loaded = LoadObjectByPath<T>(ObjectPath + TEXT(".") + Name.ToString())) {
+			/* Said the way the editor says it. What the export carries is the cloud's spelling,
+			 * which is not a package name, so asked for as written it answers nothing however
+			 * surely the asset is there. */
+			const FString Held = ToEditorPackagePath(ObjectPath) + TEXT(".") + Name.ToString();
+
+			if (T* Loaded = LoadObjectByPath<T>(Held)) {
 				return Loaded;
+			}
+
+			/* And asked for where the project has not got it.
+			 *
+			 * A struct or an enum a blueprint declares is an asset of its own, and nothing else in
+			 * reading this one goes looking for it: it is named by what a property is rather than
+			 * by anything a property holds. Left unasked the type reads as nothing, and a parameter
+			 * whose type is nothing is left off the function altogether, which takes the node that
+			 * called it with it. */
+			if (TToolImportFromPath::Import(ObjectPath)) {
+				if (T* Made = LoadObjectByPath<T>(Held)) {
+					return Made;
+				}
 			}
 		}
 
 #if UE5_1_BEYOND
-		return FindFirstObject<T>(*Name.ToString());
+		if (T* Found = FindFirstObject<T>(*Name.ToString())) {
+			return Found;
+		}
+
+		/* Renamed since the build the export was made from.
+		 *
+		 * The engine keeps the old name only as a redirect in its config, MatineeCameraShake becoming
+		 * LegacyCameraShake, so asked for by the name the export carries the type is not there at
+		 * all and the variable is dropped. A package already saved with the old name loads through
+		 * the same redirect, so following it here gives the type the engine would have used. */
+		const ECoreRedirectFlags Kind = std::is_same_v<T, UEnum> ? ECoreRedirectFlags::Type_Enum
+			: (std::is_same_v<T, UScriptStruct> ? ECoreRedirectFlags::Type_Struct : ECoreRedirectFlags::Type_Class);
+		const FCoreRedirectObjectName Redirected = FCoreRedirects::GetRedirectedName(Kind, FCoreRedirectObjectName(Name, NAME_None, NAME_None));
+
+		if (Redirected.ObjectName == Name && Redirected.PackageName.IsNone()) {
+			return nullptr;
+		}
+
+		if (!Redirected.PackageName.IsNone()) {
+			return FindObject<T>(nullptr, *Redirected.ToString());
+		}
+
+		return FindFirstObject<T>(*Redirected.ObjectName.ToString());
 #else
 		return FindObject<T>(ANY_PACKAGE, *Name.ToString());
 #endif
@@ -214,6 +258,26 @@ TSet<FString> FBlueprintVariables::GetWidgetVariables(FUObjectExportContainer* C
 		}
 	}
 
+	/* And what its animations give it, which is a property apiece under the animation's own name.
+	 *
+	 * An animation is kept as RotatorHover_INST and the property made for it is RotatorHover, which
+	 * is the name the importer gives the animation itself when it makes it. Both are put in, since
+	 * the class writes the property down under the shorter one and nothing else says the two are
+	 * the same thing. */
+	for (const FUObjectExport* Export : Container->Exports) {
+		if (Export == nullptr || !Export->IsJsonValid()) continue;
+
+		if (Export->GetType() != TEXT("WidgetAnimation")) continue;
+
+		FString Called = Export->GetName().ToString();
+
+		Named.Add(Called);
+
+		if (Called.Split(TEXT("_INST"), &Called, nullptr, ESearchCase::CaseSensitive) && !Called.IsEmpty()) {
+			Named.Add(Called);
+		}
+	}
+
 	return Named;
 }
 
@@ -230,13 +294,22 @@ bool FBlueprintVariables::IsUserVariable(const TSharedPtr<FJsonObject>& Property
 	return Flags.Contains(TEXT("Edit")) || Flags.Contains(TEXT("BlueprintVisible"));
 }
 
-bool FBlueprintVariables::GetPinType(const TSharedPtr<FJsonObject>& Property, FEdGraphPinType& OutPinType) {
+bool FBlueprintVariables::GetPinType(const TSharedPtr<FJsonObject>& Property, FEdGraphPinType& OutPinType, FUObjectExportContainer* Container) {
 	if (!Property.IsValid()) {
 		return false;
 	}
 
 	FString Type;
 	if (!Property->TryGetStringField(TEXT("Type"), Type)) {
+		/* Named from elsewhere in the asset rather than written out where it is used */
+		if (Container != nullptr) {
+			const FUObjectExport* Held = Container->GetExportByObjectPath(Property);
+
+			if (Held != nullptr && Held->IsJsonValid() && Held->JsonObject != Property) {
+				return GetPinType(Held->JsonObject, OutPinType, Container);
+			}
+		}
+
 		return false;
 	}
 
@@ -245,7 +318,7 @@ bool FBlueprintVariables::GetPinType(const TSharedPtr<FJsonObject>& Property, FE
 	const TSharedPtr<FJsonObject>* Element = nullptr;
 
 	if (Type == TEXT("ArrayProperty") && Property->TryGetObjectField(TEXT("Inner"), Element)) {
-		if (!GetPinType(*Element, OutPinType)) return false;
+		if (!GetPinType(*Element, OutPinType, Container)) return false;
 
 		OutPinType.ContainerType = EPinContainerType::Array;
 
@@ -253,7 +326,7 @@ bool FBlueprintVariables::GetPinType(const TSharedPtr<FJsonObject>& Property, FE
 	}
 
 	if (Type == TEXT("SetProperty") && Property->TryGetObjectField(TEXT("ElementProp"), Element)) {
-		if (!GetPinType(*Element, OutPinType)) return false;
+		if (!GetPinType(*Element, OutPinType, Container)) return false;
 
 		OutPinType.ContainerType = EPinContainerType::Set;
 
@@ -268,8 +341,8 @@ bool FBlueprintVariables::GetPinType(const TSharedPtr<FJsonObject>& Property, FE
 
 		FEdGraphPinType ValuePinType;
 
-		if (!GetPinType(*Element, OutPinType)) return false;
-		if (!GetPinType(*ValueProperty, ValuePinType)) return false;
+		if (!GetPinType(*Element, OutPinType, Container)) return false;
+		if (!GetPinType(*ValueProperty, ValuePinType, Container)) return false;
 
 		OutPinType.ContainerType = EPinContainerType::Map;
 		OutPinType.PinValueType = FEdGraphTerminalType::FromPinType(ValuePinType);
@@ -334,7 +407,7 @@ bool FBlueprintVariables::GetPinType(const TSharedPtr<FJsonObject>& Property, FE
 	return false;
 }
 
-int32 FBlueprintVariables::Construct(UBlueprint* Blueprint, const TArray<TSharedPtr<FJsonValue>>& ChildProperties) {
+int32 FBlueprintVariables::Construct(UBlueprint* Blueprint, const TArray<TSharedPtr<FJsonValue>>& ChildProperties, FUObjectExportContainer* Container) {
 	if (Blueprint == nullptr) {
 		return 0;
 	}
@@ -366,7 +439,7 @@ int32 FBlueprintVariables::Construct(UBlueprint* Blueprint, const TArray<TShared
 		}
 
 		FEdGraphPinType PinType;
-		if (!GetPinType(Property, PinType)) {
+		if (!GetPinType(Property, PinType, Container)) {
 			FString Type;
 			Property->TryGetStringField(TEXT("Type"), Type);
 

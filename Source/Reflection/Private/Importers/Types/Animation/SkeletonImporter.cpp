@@ -38,6 +38,11 @@ bool ISkeletonImporter::Import() {
 
 		Skeleton->RemoveVirtualBones(VirtualBoneNames);
 		Skeleton->AnimRetargetSources.Empty();
+
+		/* An existing skeleton can be missing bones, for instance one made empty as a stand-in before its own
+		 * import ran. Without them every animation imported against it has nothing to move, so any bone the
+		 * export has and the skeleton lacks is added here too. */
+		ApplySkeletalChanges(Skeleton);
 	}
 
 	/* Deserialize Skeleton */
@@ -113,18 +118,40 @@ void ISkeletonImporter::ApplySkeletalChanges(USkeleton* Skeleton) const {
 	TArray<TSharedPtr<FJsonValue>> FinalRefBoneInfo = ReferenceSkeletonObject->GetArrayField(TEXT("FinalRefBoneInfo"));
 	TArray<TSharedPtr<FJsonValue>> FinalRefBonePose = ReferenceSkeletonObject->GetArrayField(TEXT("FinalRefBonePose"));
 
-	int BoneIndex = 0;
+	/* Bone names in export order, so a parent index from the export can be turned into a name */
+	TArray<FName> ExportBoneNames;
+
+	for (const auto& FinalReferenceBoneInfoValue : FinalRefBoneInfo) {
+		ExportBoneNames.Add(FName(*FinalReferenceBoneInfoValue->AsObject()->GetStringField(TEXT("Name"))));
+	}
 
 	/* Go through each bone reference */
-	for (const auto& FinalReferenceBoneInfoValue : FinalRefBoneInfo) {
-		const TSharedPtr<FJsonObject> FinalReferenceBoneInfo = FinalReferenceBoneInfoValue->AsObject();
+	for (int BoneIndex = 0; BoneIndex < FinalRefBoneInfo.Num(); BoneIndex++) {
+		const TSharedPtr<FJsonObject> FinalReferenceBoneInfo = FinalRefBoneInfo[BoneIndex]->AsObject();
 
-		FName Name(*FinalReferenceBoneInfo->GetStringField(TEXT("Name")));
-		const int ParentIndex = FinalReferenceBoneInfo->GetIntegerField(TEXT("ParentIndex"));
+		const FName Name = ExportBoneNames[BoneIndex];
+		const int ExportParentIndex = FinalReferenceBoneInfo->GetIntegerField(TEXT("ParentIndex"));
+
+		/* Bones the skeleton already has are kept as they are */
+		if (ReferenceSkeleton.FindRawBoneIndex(Name) != INDEX_NONE) {
+			continue;
+		}
 
 		/* Fail-safe */
 		if (!FinalRefBonePose.IsValidIndex(BoneIndex) || !FinalRefBonePose[BoneIndex].IsValid()) {
 			continue;
+		}
+
+		/* The export's parent index counts the export's bones, and the skeleton may already hold some of them in
+		 * a different order, so the parent is found by name. The export lists parents before children. */
+		int ParentIndex = INDEX_NONE;
+
+		if (ExportBoneNames.IsValidIndex(ExportParentIndex)) {
+			ParentIndex = ReferenceSkeleton.FindRawBoneIndex(ExportBoneNames[ExportParentIndex]);
+
+			if (ParentIndex == INDEX_NONE) {
+				continue;
+			}
 		}
 		
 		TSharedPtr<FJsonObject> BonePoseTransform = FinalRefBonePose[BoneIndex]->AsObject();
@@ -136,8 +163,6 @@ void ISkeletonImporter::ApplySkeletalChanges(USkeleton* Skeleton) const {
 
 		/* Add the bone */
 		ReferenceSkeletonModifier.Add(MeshBoneInfo, Transform);
-
-		BoneIndex++;
 	}
 
 	/* Re-build skeleton */
