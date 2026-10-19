@@ -24,12 +24,14 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 
-/* [4.26] 	4.26 doesn't find the UMetaData header on it's own.
- * 			Let's help it out. */
-#if UE4_26
 #include "UObject/MetaData.h"
-#endif
 
+// UE 5.8 stores live package metadata in FMetaData; old serialized objects use this class.
+#if UE5_8_BEYOND
+using FReflectionMetadataObject = UDEPRECATED_MetaData;
+#else
+using FReflectionMetadataObject = UMetaData;
+#endif
 /* The file a package name lands on, if any. */
 inline bool PackageFileOf(const FString& LongPackageName, FString& OutFilename) {
 #if ENGINE_UE5
@@ -55,7 +57,7 @@ inline bool PackageHoldsAsset(const FString& LongPackageName) {
 
 		for (const UObject* One : Inside) {
 			/* Every package carries one of these whether or not anything was built in it */
-			if (One != nullptr && !One->IsA<UMetaData>()) return true;
+			if (One != nullptr && !One->IsA<FReflectionMetadataObject>()) return true;
 		}
 
 		return false;
