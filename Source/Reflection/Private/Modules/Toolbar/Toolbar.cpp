@@ -334,7 +334,7 @@ void UReflectionToolbar::AddReflectionButtons(FToolMenuSection& Section) {
 					TToolImportFolder().Execute(FString(), /* bUseClipboard */ true);
 				}),
 				FCanExecuteAction::CreateLambda([] {
-					return !FImportJob::IsRunning() && !WaitingForCloud.IsValid() && ImportActionStartedAt == 0.0;
+					return !FImportJob::IsRunning();
 				}),
 				FGetActionCheckState(),
 				FIsActionButtonVisible::CreateStatic(&IsToolBarVisible)
