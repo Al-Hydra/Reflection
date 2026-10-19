@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
+#include "Settings/FolderImportOptions.h"
 
 class SEditableTextBox;
 class SWindow;
@@ -47,7 +48,7 @@ public:
 
 	/* Runs the dialog modally. Reflect is the answer that fills OutPaths with what Cloud listed
 	 * under the folder; the rest leave it alone. */
-	static EReflectFolderChoice Open(TArray<FString>& OutPaths, TSet<FString>& OutAllowedTypes, const FString& InitialFolder = FString(), bool bUseClipboard = false, bool bCanGoBack = false);
+	static EReflectFolderChoice Open(TArray<FString>& OutPaths, TSet<FString>& OutAllowedTypes, const FString& InitialFolder = FString(), bool bUseClipboard = false, bool bCanGoBack = false, FFolderImportOptions* OutOptions = nullptr);
 
 private:
 	FReply OnBackClicked();
@@ -74,6 +75,7 @@ private:
 	FText GetStatusText() const;
 	FText GetReflectText() const;
 	FText GetTypesText() const;
+	FText GetOptionsStatus() const;
 
 	TSharedRef<ITableRow> GenerateRow(TSharedPtr<FString> Path, const TSharedRef<STableViewBase>& OwnerTable) const;
 
@@ -87,6 +89,7 @@ private:
 
 	/* Which types the run may build. Empty is no filter, which is what it starts as. */
 	TSet<FString> AllowedTypes;
+	FFolderImportOptions Options;
 
 	/* Lets the status line tell "nothing looked for yet" apart from "nothing there" */
 	bool Searched = false;

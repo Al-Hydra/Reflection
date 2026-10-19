@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Importers/Constructor/ImportJob.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "Editor.h"
 #include "TimerManager.h"
@@ -132,7 +133,7 @@ namespace {
 
 			/* Left alive deliberately. Importers keep hold of exports out of this container well
 			 * past the call that made it, which is why nothing in Reflection deletes one. */
-			FUObjectExportContainer* Container = new FUObjectExportContainer(DataObjects);
+			FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(DataObjects);
 
 			/* Parsed, but nothing in it the container recognised as an export, so it is finished
 			 * the moment it is opened. Returning it would step straight off the end. */

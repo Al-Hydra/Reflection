@@ -4,6 +4,7 @@
 
 
 #include "Engine/Compatibility.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Engine/FontFace.h"
 
@@ -110,7 +111,7 @@ T* LoadObjectByPath(const FString& InPath) {
 	return Cast<T>(ResolveRedirector(StaticLoadObject(T::StaticClass(), nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet)));
 }
 
-inline void SavePackage(UPackage* Package) {
+inline bool SavePackageImmediately(UPackage* Package) {
 	const FString PackageName = Package->GetName();
 	const FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
 
@@ -121,10 +122,18 @@ inline void SavePackage(UPackage* Package) {
 		SaveArgs.SaveFlags = SAVE_NoError;
 	}
 
-	UPackage::SavePackage(Package, nullptr, *PackageFileName, SaveArgs);
+	return UPackage::SavePackage(Package, nullptr, *PackageFileName, SaveArgs);
 #else
-	UPackage::SavePackage(Package, nullptr, RF_Standalone, *PackageFileName);
+	return UPackage::SavePackage(Package, nullptr, RF_Standalone, *PackageFileName);
 #endif
+}
+
+inline void SavePackage(UPackage* Package) {
+	if (FBulkImportMemory::IsActive()) {
+		FBulkImportMemory::TrackPackage(Package);
+		return;
+	}
+	SavePackageImmediately(Package);
 }
 
 /* bBrowse says whether to jump the content browser to what was made.
@@ -162,11 +171,11 @@ inline bool HandleAssetCreation(UObject* Asset, UPackage* Package, const bool bB
 		Asset->PostEditChange();
 	}
 
-	Asset->AddToRoot();
+	FBulkImportMemory::RetainAsset(Asset);
 
 	Package->FullyLoad();
 
-	if (bBrowse) BrowseToAsset(Asset);
+	if (bBrowse && !FBulkImportMemory::IsActive()) BrowseToAsset(Asset);
 
 	if (UVectorFieldStatic* VectorFieldStatic = Cast<UVectorFieldStatic>(Asset)) {
 		VectorFieldStatic->Resource = nullptr;

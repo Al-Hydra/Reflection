@@ -15,13 +15,17 @@ class UAnimSequence;
  * compresses again on save is what the game was playing.
  *
  * The sequence keeps what it was cooked as. An additive one stays additive against the same pose,
- * and nothing is retargeted on the way through: a sequence is meant for the skeleton it names. */
+ * and nothing is retargeted on the way through. A folder override assigns the chosen skeleton
+ * and matches its bones by name. */
 class IAnimSequenceImporter : public IImporter {
 public:
 	virtual UObject* CreateAsset(UObject* CreatedAsset) override;
 	virtual bool Import() override;
 
 private:
+	friend class FAnimationSkeletonOverrideTest;
+	friend class FAnimationMorphCurvesTest;
+	bool ImportPayload(USkeleton* Skeleton, const TSharedPtr<FJsonObject>& Payload);
 	/* The skeleton the sequence is played on, imported through the Cloud when the project doesn't
 	 * have it. Null when the export names none, or when the one it names could not be reached. */
 	USkeleton* ResolveSkeleton();

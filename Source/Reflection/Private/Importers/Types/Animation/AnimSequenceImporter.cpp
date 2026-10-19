@@ -12,6 +12,7 @@
 #include "Engine/EngineUtilities.h"
 #include "Utilities/JsonHelpers.h"
 #include "Modules/Cloud/Tools/AnimationData.h"
+#include "Settings/FolderImportOptions.h"
 
 #if ENGINE_UE5 && ENGINE_MINOR_VERSION >= 2
 #include "Animation/AnimData/IAnimationDataController.h"
@@ -78,6 +79,9 @@ UObject* IAnimSequenceImporter::CreateAsset(UObject* CreatedAsset) {
 }
 
 USkeleton* IAnimSequenceImporter::ResolveSkeleton() {
+	if (const FScopedFolderImportOptions* Options = FScopedFolderImportOptions::Get()) {
+		if (USkeleton* Selected = Options->GetAnimationSkeleton()) return Selected;
+	}
 	const FUObjectJsonValueExport SkeletonReference = GetAssetDataAsValue().GetObject(TEXT("Skeleton"));
 
 	if (!SkeletonReference.JsonObject.IsValid() || !SkeletonReference.Has(TEXT("ObjectName"))) {
@@ -139,7 +143,7 @@ bool IAnimSequenceImporter::Import() {
 		 * A run of folders is hundreds of these, and stopping on a dialog for each is not a
 		 * question, it is a queue. Left unasked, the difference is built over the skeleton's own
 		 * pose, which is what going without has always meant. */
-		const bool bAsk = !FImportJob::IsRunning() && !IsRunningCommandlet();
+		const bool bAsk = !FImportJob::IsRunning() && !FScopedFolderImportOptions::Get() && !IsRunningCommandlet();
 
 		if (!bAsk) {
 			UE_LOG(LogReflection, Display, TEXT("\"%s\" is a difference with nothing to put it over, and a run of assets is no place to ask what"), *GetAssetName());
@@ -170,6 +174,10 @@ bool IAnimSequenceImporter::Import() {
 		return false;
 	}
 
+	return ImportPayload(Skeleton, Payload);
+}
+
+bool IAnimSequenceImporter::ImportPayload(USkeleton* Skeleton, const TSharedPtr<FJsonObject>& Payload) {
 	UAnimSequence* AnimSequence = Create<UAnimSequence>();
 	if (AnimSequence == nullptr) return false;
 
@@ -215,16 +223,6 @@ bool IAnimSequenceImporter::Import() {
 
 	const int32 WrittenTracks = BuildTracks(AnimSequence, Skeleton, Payload);
 
-	if (WrittenTracks == 0) {
-		FImportIssues::Report(
-			EImportIssue::Failed,
-			TEXT("None of the animation's bones are on this skeleton"),
-			TEXT("Every track the Cloud sent names a bone the skeleton hasn't got, so there is nothing for the sequence to move.")
-		);
-
-		return false;
-	}
-
 	UE_LOG(LogReflection, Display, TEXT("\"%s\" built %d track(s) over %d frame(s) against skeleton \"%s\""),
 		*GetAssetName(), WrittenTracks, static_cast<int32>(Payload->GetIntegerField(TEXT("numFrames"))), *Skeleton->GetName());
 
@@ -242,12 +240,20 @@ bool IAnimSequenceImporter::Import() {
 	BuildAnimNotifyTracks(AnimSequence);
 
 	/* After the tracks: building them initializes the model, which takes the curves with it */
-	if (!ReadAnimationCurves(this, AnimSequence)) {
+	int32 WrittenCurves = 0;
+	if (!ReadAnimationCurves(this, AnimSequence, &WrittenCurves)) {
 		FImportIssues::Report(
 			EImportIssue::Data,
 			TEXT("The animation's curves weren't read"),
 			TEXT("The sequence imports without them, so anything driven by a curve stays still.")
 		);
+	}
+
+	// Morph poses can have no usable bone tracks. Judge them after importing their curves.
+	if (WrittenTracks == 0 && WrittenCurves == 0) {
+		FImportIssues::Report(EImportIssue::Failed, TEXT("No usable bone tracks or animation curves"),
+			TEXT("No bone tracks matched the skeleton and no named curves with usable keys could be imported."));
+		return false;
 	}
 
 	AnimSequence->PostEditChange();
@@ -256,9 +262,9 @@ bool IAnimSequenceImporter::Import() {
 }
 
 int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton* Skeleton, const TSharedPtr<FJsonObject>& Payload) const {
-	const TArray<TSharedPtr<FJsonValue>>* TracksJson = nullptr;
-
-	if (!Payload->TryGetArrayField(TEXT("tracks"), TracksJson)) return 0;
+	const TArray<TSharedPtr<FJsonValue>> EmptyTracks;
+	const TArray<TSharedPtr<FJsonValue>>* TracksJson = &EmptyTracks;
+	if (!Payload->TryGetArrayField(TEXT("tracks"), TracksJson)) TracksJson = &EmptyTracks;
 
 	const int32 NumFrames = FMath::Max(1, Payload->GetIntegerField(TEXT("numFrames")));
 
@@ -272,6 +278,7 @@ int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton*
 	TArray<TArray<FVector>> PositionKeys;
 	TArray<TArray<FQuat>> RotationKeys;
 	TArray<TArray<FVector>> ScaleKeys;
+	int32 MissingBones = 0;
 
 	for (const TSharedPtr<FJsonValue>& TrackValue : *TracksJson) {
 		const TSharedPtr<FJsonObject> TrackJson = TrackValue.IsValid() ? TrackValue->AsObject() : nullptr;
@@ -281,7 +288,10 @@ int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton*
 		if (!TrackJson->TryGetStringField(TEXT("bone"), BoneName) || BoneName.IsEmpty()) continue;
 
 		const int32 BoneIndex = RefSkeleton.FindBoneIndex(FName(*BoneName));
-		if (BoneIndex == INDEX_NONE) continue;
+		if (BoneIndex == INDEX_NONE) {
+			++MissingBones;
+			continue;
+		}
 
 		/* The Cloud sends an additive sequence as the animation rather than as the difference, the
 		 * way the engine keeps its own, so a channel with no keys is the bind pose either way */
@@ -384,7 +394,14 @@ int32 IAnimSequenceImporter::BuildTracks(UAnimSequence* AnimSequence, USkeleton*
 		ScaleKeys.Add(MoveTemp(TrackScales));
 	}
 
-	if (BoneNames.Num() == 0) return 0;
+	if (MissingBones > 0) {
+		if (const FScopedFolderImportOptions* Options = FScopedFolderImportOptions::Get(); Options && Options->GetAnimationSkeleton()) {
+			FImportIssues::Report(EImportIssue::Data,
+				FString::Printf(TEXT("%d animation track(s) have no matching bone on the selected skeleton"), MissingBones),
+				TEXT("Those bone tracks were skipped. Morph curves are imported separately and do not require these bones. Skeleton assignment does not retarget the motion."));
+		}
+	}
+	// Initialize duration even for a curve-only animation, and clear tracks from any prior import.
 
 	/* The rate the frames were laid out at, which is the sequence's own: the last frame lands on
 	 * the end of it rather than a frame beyond it. */

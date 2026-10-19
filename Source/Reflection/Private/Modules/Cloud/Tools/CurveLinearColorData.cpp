@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/CurveLinearColorData.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "Curves/CurveLinearColor.h"
 #include "Engine/EngineUtilities.h"
 #include "Utilities/JsonHelpers.h"
@@ -9,7 +10,7 @@ void TCurveLinearColorData::Process(UObject* Object, const TArray<TSharedPtr<FJs
 	UCurveLinearColor* CurveLinearColor = Cast<UCurveLinearColor>(Object);
 	if (!CurveLinearColor) return;
 
-	FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+	FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 	FUObjectExport* Export = Container->FindByType(FString("CurveLinearColor"));
 
 	/* FindByType hands back an empty export rather than null when there is no match, and

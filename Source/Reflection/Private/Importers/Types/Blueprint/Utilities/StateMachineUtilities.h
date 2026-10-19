@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "Importers/Constructor/ImportMemory.h"
+
 #include "Importers/Types/Blueprint/AnimationBlueprintImporter.h"
 #include "Importers/Types/Blueprint/BlueprintImporter.h"
 #include "AnimationBlueprintUtilities.h"
@@ -252,7 +254,7 @@ inline void CreateStateMachineGraph(
 		FEdGraphUtilities::RenameGraphToNameOrCloseToName(BoundGraph, *StateName);
 
 		Container.Exports.Add(
-			new FUObjectExport(
+			FImportWorkScope::New<FUObjectExport>(
 				FName(*StateName),
 				NAME_None,
 				NAME_None,

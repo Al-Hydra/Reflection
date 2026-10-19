@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "Importers/Constructor/ImportMemory.h"
+
 #include "Importers/Constructor/Types.h"
 #include "Engine/EngineUtilities.h"
 #include "Settings/ReflectionSettings.h"
@@ -74,5 +76,5 @@ inline FImporterFactoryDelegate* FindFactoryForAssetType(const FString& AssetTyp
 
 template <typename T>
 IImporter* CreateImporter() {
-	return new T();
+	return FImportWorkScope::New<T>();
 }

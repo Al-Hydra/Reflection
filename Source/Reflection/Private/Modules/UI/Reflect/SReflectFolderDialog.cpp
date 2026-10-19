@@ -22,8 +22,17 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STableRow.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SSpinBox.h"
+#include "PropertyCustomizationHelpers.h"
+#include "AssetRegistry/AssetData.h"
+#include "Engine/AssetCompatibility.h"
+#include "Materials/Material.h"
+#include "Animation/Skeleton.h"
 
 #define LOCTEXT_NAMESPACE "Reflection.ReflectFolder"
+
+static FFolderImportOptions LastFolderOptions;
 
 /* Reduces whatever was pasted to the folder it lives in. */
 static FString ToFolderPath(FString Path) {
@@ -39,10 +48,10 @@ static FString ToFolderPath(FString Path) {
 	return Path;
 }
 
-EReflectFolderChoice SReflectFolderDialog::Open(TArray<FString>& OutPaths, TSet<FString>& OutAllowedTypes, const FString& InitialFolder, const bool bUseClipboard, const bool bCanGoBack) {
+EReflectFolderChoice SReflectFolderDialog::Open(TArray<FString>& OutPaths, TSet<FString>& OutAllowedTypes, const FString& InitialFolder, const bool bUseClipboard, const bool bCanGoBack, FFolderImportOptions* OutOptions) {
 	const TSharedRef<SWindow> Window = SNew(SWindow)
 		.Title(LOCTEXT("Title", "Reflect Folder"))
-		.ClientSize(FVector2D(720.0f, 480.0f))
+		.ClientSize(FVector2D(780.0f, 680.0f))
 		.SupportsMinimize(false)
 		.SupportsMaximize(false);
 
@@ -71,12 +80,15 @@ EReflectFolderChoice SReflectFolderDialog::Open(TArray<FString>& OutPaths, TSet<
 
 	OutPaths = Dialog->Paths;
 	OutAllowedTypes = Dialog->AllowedTypes;
+	if (OutOptions) *OutOptions = Dialog->Options;
+	LastFolderOptions = Dialog->Options;
 
 	return OutPaths.Num() > 0 ? EReflectFolderChoice::Reflect : EReflectFolderChoice::Cancelled;
 }
 
 void SReflectFolderDialog::Construct(const FArguments& InArgs) {
 	ParentWindow = InArgs._ParentWindow;
+	Options = LastFolderOptions;
 
 	ChildSlot
 	[
@@ -126,6 +138,118 @@ void SReflectFolderDialog::Construct(const FArguments& InArgs) {
 					.ToolTipText(LOCTEXT("FindTooltip", "Ask Cloud what is under that folder"))
 					.IsEnabled(this, &SReflectFolderDialog::CanFind)
 					.OnClicked(this, &SReflectFolderDialog::OnFindClicked)
+				]
+			]
+		]
+
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(8.0f, 6.0f)
+		[
+			SNew(SBorder)
+			.BorderImage(FAppStyle::Get().GetBrush("ToolPanel.GroupBorder"))
+			.Padding(10.0f)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+					[
+						SNew(STextBlock).Text(LOCTEXT("PrefixLabel", "Destination prefix"))
+					]
+					+ SHorizontalBox::Slot().FillWidth(1)
+					[
+						SNew(SEditableTextBox)
+						.Text(FText::FromString(Options.DestinationPrefix))
+						.HintText(LOCTEXT("PrefixHint", "Sun (leave empty for the original paths)"))
+						.ToolTipText(LOCTEXT("PrefixTooltip", "Place imported game assets and their dependencies under Content/<prefix>, preserving their original folders."))
+						.OnTextChanged_Lambda([this](const FText& Text) { Options.DestinationPrefix = Text.ToString(); })
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+					[
+						SNew(SCheckBox)
+						.IsChecked_Lambda([this] { return Options.bOverrideMaterialParent ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+						.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Options.bOverrideMaterialParent = State == ECheckBoxState::Checked; })
+						[
+							SNew(STextBlock).Text(LOCTEXT("ParentOverrideLabel", "Override instance parent"))
+						]
+					]
+					+ SHorizontalBox::Slot().FillWidth(1)
+					[
+						SNew(SObjectPropertyEntryBox)
+						.AllowedClass(UMaterial::StaticClass())
+						.ObjectPath_Lambda([this] { return Options.MaterialParent.ToString(); })
+						.OnObjectChanged_Lambda([this](const FAssetData& Asset) { Options.MaterialParent = FSoftObjectPath(GetAssetObjectPath(Asset)); })
+						.IsEnabled_Lambda([this] { return Options.bOverrideMaterialParent; })
+						.AllowClear(true).DisplayThumbnail(false)
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+					[
+						SNew(SCheckBox)
+						.IsChecked_Lambda([this] { return Options.bOverrideSkeleton ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+						.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Options.bOverrideSkeleton = State == ECheckBoxState::Checked; })
+						[
+							SNew(STextBlock).Text(LOCTEXT("SkeletonOverrideLabel", "Override mesh/animation skeleton"))
+						]
+					]
+					+ SHorizontalBox::Slot().FillWidth(1)
+					[
+						SNew(SObjectPropertyEntryBox)
+						.AllowedClass(USkeleton::StaticClass())
+						.ObjectPath_Lambda([this] { return Options.Skeleton.ToString(); })
+						.OnObjectChanged_Lambda([this](const FAssetData& Asset) { Options.Skeleton = FSoftObjectPath(GetAssetObjectPath(Asset)); })
+						.IsEnabled_Lambda([this] { return Options.bOverrideSkeleton; })
+						.AllowClear(true).DisplayThumbnail(false)
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("SkeletonScope", "Animations: all folders and imported dependencies. Meshes: Characters/Custom/BodyLower, BodyUpper, HeadGear, Accessories. Assigns by bone name; does not retarget motion."))
+					.AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+				[
+					SNew(STextBlock).Text(this, &SReflectFolderDialog::GetOptionsStatus).AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+				[
+					SNew(SCheckBox)
+					.IsChecked_Lambda([this] { return Options.bSaveAndReleaseBatches ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Options.bSaveAndReleaseBatches = State == ECheckBoxState::Checked; })
+					.ToolTipText(LOCTEXT("BatchSaveTooltip", "Automatically save imported packages and release completed batches. Packages with existing unsaved edits stay unsaved; packages already loaded before the run stay loaded. Overrides the general Save Assets option for this folder run."))
+					[
+						SNew(STextBlock).Text(LOCTEXT("BatchSave", "Save and release assets in batches (recommended for large folders)"))
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+				[
+					SNew(SHorizontalBox).IsEnabled_Lambda([this] { return Options.bSaveAndReleaseBatches; })
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					[ SNew(STextBlock).Text(LOCTEXT("BatchSize", "Assets per batch  ")) ]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SSpinBox<int32>).MinValue(1).MaxValue(256).MinDesiredWidth(70)
+						.Value_Lambda([this] { return Options.BatchSize; })
+						.OnValueChanged_Lambda([this](int32 Value) { Options.BatchSize = Value; })
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(16, 0, 0, 0)
+					[ SNew(STextBlock).Text(LOCTEXT("MemoryReserve", "Free memory reserve (MiB)  ")) ]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SSpinBox<int32>).MinValue(512).MaxValue(32768).MinDesiredWidth(90)
+						.Value_Lambda([this] { return Options.MemoryReserveMB; })
+						.OnValueChanged_Lambda([this](int32 Value) { Options.MemoryReserveMB = Value; })
+					]
 				]
 			]
 		]
@@ -278,6 +402,7 @@ FReply SReflectFolderDialog::OnUseSelectedFolderClicked() {
 }
 
 FReply SReflectFolderDialog::OnReflectClicked() {
+	if (!CanReflect()) return FReply::Handled();
 	Accepted = true;
 
 	if (ParentWindow.IsValid()) {
@@ -320,7 +445,22 @@ bool SReflectFolderDialog::CanFind() const {
 }
 
 bool SReflectFolderDialog::CanReflect() const {
-	return Paths.Num() > 0;
+	FString Prefix;
+	FText Error;
+	return Paths.Num() > 0 && FFolderImportOptions::NormalizePrefix(Options.DestinationPrefix, Prefix, Error)
+		&& (!Options.bOverrideMaterialParent || !Options.MaterialParent.IsNull())
+		&& (!Options.bOverrideSkeleton || !Options.Skeleton.IsNull());
+}
+
+FText SReflectFolderDialog::GetOptionsStatus() const {
+	FString Prefix;
+	FText Error;
+	if (!FFolderImportOptions::NormalizePrefix(Options.DestinationPrefix, Prefix, Error)) return Error;
+	if (Options.bOverrideMaterialParent && Options.MaterialParent.IsNull()) return LOCTEXT("PickParent", "Select a parent material to continue.");
+	if (Options.bOverrideSkeleton && Options.Skeleton.IsNull()) return LOCTEXT("PickSkeleton", "Select a skeleton to continue.");
+	return FText::FromString(Prefix.IsEmpty()
+		? TEXT("Destination: Content/<original path>")
+		: TEXT("Destination: Content/") + Prefix + TEXT("/<original path>"));
 }
 
 EVisibility SReflectFolderDialog::GetBackVisibility() const {

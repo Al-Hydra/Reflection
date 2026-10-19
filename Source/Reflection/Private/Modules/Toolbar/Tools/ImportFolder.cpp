@@ -9,6 +9,8 @@
 #include "Modules/UI/Reflect/SReflectFolderDialog.h"
 #include "Engine/EngineUtilities.h"
 #include "Utilities/Dialog.h"
+#include "Settings/FolderImportOptions.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 bool TToolImportFolder::Execute(const FString& InitialFolder, const bool bUseClipboard, const bool bCanGoBack) {
 	if (!Cloud::Status::IsOpened()) {
@@ -28,8 +30,9 @@ bool TToolImportFolder::Execute(const FString& InitialFolder, const bool bUseCli
 	 * a request, so what comes down is worth seeing before it runs */
 	TArray<FString> Paths;
 	TSet<FString> AllowedTypes;
+	FFolderImportOptions Options;
 
-	const EReflectFolderChoice Choice = SReflectFolderDialog::Open(Paths, AllowedTypes, InitialFolder, bUseClipboard, bCanGoBack);
+	const EReflectFolderChoice Choice = SReflectFolderDialog::Open(Paths, AllowedTypes, InitialFolder, bUseClipboard, bCanGoBack, &Options);
 
 	if (Choice == EReflectFolderChoice::Back) {
 		return true;
@@ -39,22 +42,37 @@ bool TToolImportFolder::Execute(const FString& InitialFolder, const bool bUseCli
 		return false;
 	}
 
+	const FScopedFolderImportOptions ImportOptions(Options);
+	if (!ImportOptions.IsValid()) {
+		SpawnPrompt("Reflect Folder", ImportOptions.GetError().ToString());
+		return false;
+	}
+
 	int32 Reflected = 0;
 	int32 Attempted = 0;
 	int32 Filtered = 0;
 	bool Cancelled = false;
+	bool MemoryStopped = false;
+	FBulkImportMemory Memory(Options.bSaveAndReleaseBatches, Options.BatchSize, Options.MemoryReserveMB);
 
 	FImportIssues::Begin(); {
 		/* Import opens a scope of its own per asset, which is what the dialog ends up showing.
 		 * This one is here to own the Cancel button for the whole run rather than for one asset. */
 		const FBlockingRequestScope BlockingScope(NSLOCTEXT("Reflection", "ReflectingFolder", "Reflecting folder"));
+		if (!Memory.HasMemoryHeadroom()) MemoryStopped = !Memory.Checkpoint();
 
 		for (const FString& Path : Paths) {
+			if (MemoryStopped) break;
 			bool WasFiltered = false;
 
-			if (TToolImportFromPath::Import(Path, AllowedTypes, &WasFiltered)) {
-				Reflected++;
+			{
+				// Dependencies share this lifetime; nothing is freed inside their import stack.
+				FImportWorkScope Work;
+				if (TToolImportFromPath::Import(Path, AllowedTypes, &WasFiltered)) {
+					Reflected++;
+				}
 			}
+			MemoryStopped = !Memory.AfterAsset();
 
 			/* A type the filter turned down never had a chance to succeed, so counting it as
 			 * attempted would report the run as failing */
@@ -72,12 +90,14 @@ bool TToolImportFolder::Execute(const FString& InitialFolder, const bool bUseCli
 				break;
 			}
 		}
+		// Also saves the final partial batch when Cancel was pressed.
+		if (!MemoryStopped) MemoryStopped = !Memory.Checkpoint();
 	}
 
-	const bool Successful = !Cancelled && Reflected == Attempted;
+	const bool Successful = !Cancelled && !MemoryStopped && Reflected == Attempted;
 
 	AppendNotification(
-		FText::FromString(Cancelled ? "Reflect Folder Cancelled" : (Successful ? "Reflected Folder" : "Reflected With Failures")),
+		FText::FromString(MemoryStopped ? "Reflect Folder Stopped" : (Cancelled ? "Reflect Folder Cancelled" : (Successful ? "Reflected Folder" : "Reflected With Failures"))),
 		FText::FromString(Filtered > 0
 			? FString::Printf(TEXT("%d of %d, %d filtered out"), Reflected, Attempted, Filtered)
 			: FString::Printf(TEXT("%d of %d"), Reflected, Paths.Num())),

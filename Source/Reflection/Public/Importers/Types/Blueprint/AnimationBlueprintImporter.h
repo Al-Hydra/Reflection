@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "Importers/Constructor/ImportMemory.h"
+
 #include "Importers/Types/Blueprint/BlueprintImporter.h"
 
 class UAnimGraphNode_BlendListByEnum;
@@ -129,7 +131,7 @@ protected:
 	TArray<TSharedPtr<FJsonValue>> BakedStateMachines;
 	
 	TSharedPtr<FJsonObject> RootAnimNodeProperties;
-	FUObjectExportContainer* RootAnimNodeContainer = new FUObjectExportContainer();
+	FUObjectExportContainer* RootAnimNodeContainer = FImportWorkScope::New<FUObjectExportContainer>();
 
 	/* UE5 Copy Record Cache Data */
 	TSharedPtr<FJsonObject> SerializedSparseClassData;

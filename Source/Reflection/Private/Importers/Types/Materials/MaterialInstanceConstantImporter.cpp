@@ -6,12 +6,16 @@
 #include "RHIDefinitions.h"
 #include "MaterialShared.h"
 #include "Utilities/JsonHelpers.h"
+#include "Settings/FolderImportOptions.h"
+#include "Materials/Material.h"
 
 UObject* IMaterialInstanceConstantImporter::CreateAsset(UObject* CreatedAsset) {
 	return IImporter::CreateAsset(NewObject<UMaterialInstanceConstant>(GetPackage(), UMaterialInstanceConstant::StaticClass(), *GetAssetName(), RF_Public | RF_Standalone));
 }
 
 bool IMaterialInstanceConstantImporter::Import() {
+	const FScopedFolderImportOptions* FolderOptions = FScopedFolderImportOptions::Get();
+	UMaterial* ParentOverride = FolderOptions ? FolderOptions->GetMaterialParent() : nullptr;
 	UMaterialInstanceConstant* MaterialInstanceConstant = Create<UMaterialInstanceConstant>();
 
 	/* Specific fix for 4.16 engines */
@@ -30,10 +34,11 @@ bool IMaterialInstanceConstantImporter::Import() {
 		}
 	}
 	
-	GetObjectSerializer()->DeserializeObjectProperties(RemovePropertiesShared(GetAssetData(),
-	{
-		"CachedReferencedTextures"
-	}), MaterialInstanceConstant);
+	TArray<FString> SkippedProperties = { TEXT("CachedReferencedTextures") };
+	/* Do not try reconstructing a stripped source parent when an existing one was selected. */
+	if (ParentOverride) SkippedProperties.Add(TEXT("Parent"));
+	GetObjectSerializer()->DeserializeObjectProperties(RemovePropertiesShared(GetAssetData(), SkippedProperties), MaterialInstanceConstant);
+	if (ParentOverride) MaterialInstanceConstant->SetParentEditorOnly(ParentOverride);
 
 	/* What to draw with instead where Nanite is drawing.
 	 *

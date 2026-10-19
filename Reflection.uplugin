@@ -56,6 +56,11 @@
 			"Optional": true
 		},
 		{
+			"Name": "RigLogic",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
 			"Name": "PluginUtils",
 			"Enabled": true,
 			"Optional": true

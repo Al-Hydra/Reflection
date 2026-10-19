@@ -3,6 +3,8 @@
 #include "Serializers/ObjectSerializer.h"
 
 #include "Animation/AnimNodeBase.h"
+#include "Animation/AnimationAsset.h"
+#include "Settings/FolderImportOptions.h"
 #include "Animation/WidgetAnimation.h"
 #include "Engine/Compatibility.h"
 
@@ -491,6 +493,19 @@ static TArray<FColor> RepaintOverrideColors(UStaticMesh* StaticMesh, const int32
 void UObjectSerializer::DeserializeObjectProperties(const TSharedPtr<FJsonObject>& Properties, UObject* Object) const {
 	if (Object == nullptr) return;
 
+	// Assign before reading samples, segments or pose data, and prevent subsequent property
+	// passes from restoring (or downloading) the source skeleton. Covers sequences, montages,
+	// blend spaces, composites and pose assets, including nested dependency imports.
+	bool bOverrideAnimationSkeleton = false;
+	if (const FScopedFolderImportOptions* Options = FScopedFolderImportOptions::Get()) {
+		if (UAnimationAsset* Animation = Cast<UAnimationAsset>(Object)) {
+			if (USkeleton* Selected = Options->GetAnimationSkeleton()) {
+				if (Animation->GetSkeleton() != Selected) Animation->SetSkeleton(Selected);
+				bOverrideAnimationSkeleton = true;
+			}
+		}
+	}
+
 	if (Cast<UParticleSystem>(Object)) {
 		Object->PreEditChange(nullptr);
 	}
@@ -499,6 +514,7 @@ void UObjectSerializer::DeserializeObjectProperties(const TSharedPtr<FJsonObject
 
 	for (FProperty* Property = ObjectClass->PropertyLink; Property; Property = Property->PropertyLinkNext) {
 		FString PropertyName = Property->GetName();
+		if (bOverrideAnimationSkeleton && (PropertyName == TEXT("Skeleton") || PropertyName == TEXT("SkeletonGuid"))) continue;
 
 		if (!PropertySerializer->ShouldDeserializeProperty(Property)) continue;
 

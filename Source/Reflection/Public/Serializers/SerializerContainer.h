@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "Importers/Constructor/ImportMemory.h"
+
 #include "CoreMinimal.h"
 
 #include "Serializers/PropertySerializer.h"
@@ -18,8 +20,8 @@ public:
     
     /* AssetExport ~~~~~~~~~~~~~~~> */
 public:
-    FUObjectExport* AssetExport = new FUObjectExport();
-    FUObjectExportContainer* AssetContainer = new FUObjectExportContainer();
+    FUObjectExport* AssetExport = FImportWorkScope::New<FUObjectExport>();
+    FUObjectExportContainer* AssetContainer = FImportWorkScope::New<FUObjectExportContainer>();
 
     /* Helper Functions ~~~~~~~~~~~~~~~> */
 public:

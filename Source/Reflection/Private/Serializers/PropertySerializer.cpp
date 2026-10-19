@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Serializers/PropertySerializer.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "GameplayTagContainer.h"
 #include "Importers/Constructor/Importer.h"
@@ -471,7 +472,7 @@ void UPropertySerializer::DeserializePropertyValue(FProperty* Property, const TS
 			}
 
 			if (Importer == nullptr) {
-				Importer = new IImporter();
+				Importer = FImportWorkScope::New<IImporter>();
 			}
 
 			Importer->SetParent(ObjectSerializer->Parent);
@@ -752,7 +753,7 @@ void UPropertySerializer::DeserializePropertyValue(FProperty* Property, const TS
 				TSharedPtr<FJsonObject> LocalFontFaceExport = JsonObject->GetObjectField(TEXT("LocalFontFaceAsset"));
 
 				if (Importer == nullptr) {
-					Importer = new IImporter();
+					Importer = FImportWorkScope::New<IImporter>();
 				}
 
 				TObjectPtr<UFontFace> FontFacePtr;

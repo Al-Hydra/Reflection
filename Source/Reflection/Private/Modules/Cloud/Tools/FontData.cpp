@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/FontData.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "Engine/FontFace.h"
 #include "Engine/EngineUtilities.h"
@@ -32,7 +33,7 @@ void TToolFontData::Process(UObject* Object, const TArray<TSharedPtr<FJsonValue>
 		GetObjectSerializer()->SetExportForDeserialization(JsonObject, FontFace);
 		GetObjectSerializer()->Parent = FontFace;
 
-		FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+		FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 		GetObjectSerializer()->DeserializeExports(Container);
 
 		GetObjectSerializer()->DeserializeObjectProperties(Properties, FontFace);

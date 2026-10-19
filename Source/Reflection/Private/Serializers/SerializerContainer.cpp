@@ -60,6 +60,7 @@ void USerializerContainer::DeserializeExports(UObject* Parent, const bool Create
 
 void USerializerContainer::CreateSerializer() {
 	ObjectSerializer = NewObject<UObjectSerializer>();
+	FImportWorkScope::KeepSerializer(ObjectSerializer);
 	GetObjectSerializer()->SetPropertySerializer(NewObject<UPropertySerializer>());
 }
 

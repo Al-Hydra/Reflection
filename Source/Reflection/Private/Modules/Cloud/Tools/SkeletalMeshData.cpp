@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/SkeletalMeshData.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "Engine/EngineUtilities.h"
 
@@ -124,7 +125,7 @@ void TSkeletalMeshData::Process(UObject* Object, const TArray<TSharedPtr<FJsonVa
 			
 			SkeletalMesh->GetMeshOnlySocketList().Empty();
 
-			FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+			FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 			GetObjectSerializer()->DeserializeExports(Container);
 
 			for (const FUObjectExport* UObjectExport : GetObjectSerializer()->GetPropertySerializer()->ExportsContainer->Exports) {

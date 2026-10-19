@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "Importers/Constructor/ImportMemory.h"
+
 #include "Export.h"
 #include "Containers/JsonValueExport.h"
 #include "Dom/JsonObject.h"
@@ -30,7 +32,7 @@ public:
 			if (!Object->HasField(TEXT("Name")) || !Object->HasField(TEXT("Type"))) continue;
 
 			/* Add it to the referenced objects */
-			Exports.Add(new FUObjectExport(Object, nullptr, nullptr, Index));
+			Exports.Add(FImportWorkScope::New<FUObjectExport>(Object, nullptr, nullptr, Index));
 		}
 	}
 

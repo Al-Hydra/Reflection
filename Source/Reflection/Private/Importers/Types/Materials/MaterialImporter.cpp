@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Importers/Types/Materials/MaterialImporter.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "Importers/Types/Materials/MaterialStubs.h"
 
 /* Include Material.h (depends on UE Version) */
@@ -45,7 +46,7 @@ bool IMaterialImporter::Import() {
 #endif
 
 	/* Define material data from the JSON */
-	FUObjectExportContainer* ExpressionContainer = new FUObjectExportContainer();
+	FUObjectExportContainer* ExpressionContainer = FImportWorkScope::New<FUObjectExportContainer>();
 	TSharedPtr<FJsonObject> Props = FindMaterialData(GetAssetType(), ExpressionContainer);
 
 	/* Whatever would be built out of a list with holes in it is not this material */

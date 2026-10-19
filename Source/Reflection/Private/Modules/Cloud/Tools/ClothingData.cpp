@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/ClothingData.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "Engine/EngineUtilities.h"
 #include "Utilities/JsonHelpers.h"
@@ -89,7 +90,7 @@ void TClothingData::Process(UObject* Object, const TArray<TSharedPtr<FJsonValue>
 	/* Leaves the morph targets, sockets and curve metadata alone */
 	GetObjectSerializer()->WhitelistedTypes = { TEXT("Cloth") };
 
-	FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+	FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 	GetObjectSerializer()->DeserializeExports(Container);
 
 	/* A section names its cloth by index into this list, so the export's order is kept */

@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/WidgetAnimations.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "WidgetBlueprint.h"
 #include "Animation/WidgetAnimation.h"
 #include "Engine/EngineUtilities.h"
@@ -9,7 +10,7 @@ void TWidgetAnimations::Process(UObject* Object, const TArray<TSharedPtr<FJsonVa
 	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(Object);
 	if (!WidgetBlueprint) return;
 
-	FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+	FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 	FUObjectExport* Export = Container->FindByType(FString("WidgetBlueprintGeneratedClass"));
 
 	if (!Export->IsJsonValid()) return;

@@ -176,6 +176,7 @@ bool FTextureImport::FromExport(const TSharedPtr<FJsonObject>& Export, const FSt
 
 	UTexture* Texture = nullptr;
 	if (!TextureCreator.Create(Type, Export, Data, Texture) || Texture == nullptr) {
+		FBulkImportMemory::MarkFailedPackage(Package);
 		return false;
 	}
 
@@ -186,12 +187,12 @@ bool FTextureImport::FromExport(const TSharedPtr<FJsonObject>& Export, const FSt
 
 	Package->SetDirtyFlag(true);
 	Texture->PostEditChange();
-	Texture->AddToRoot();
+	FBulkImportMemory::RetainAsset(Texture);
 	Package->FullyLoad();
 
 	/* Textures don't go through HandleAssetCreation, so the jump to the asset has to happen here,
 	 * and only where nothing is waiting on it further up */
-	if (FAssetUtilities::ImportDepth <= 1) BrowseToAsset(Texture);
+	if (FAssetUtilities::ImportDepth <= 1 && !FBulkImportMemory::IsActive()) BrowseToAsset(Texture);
 
 	if (Settings->AssetSettings.SaveAssets) {
 		SavePackage(Package);

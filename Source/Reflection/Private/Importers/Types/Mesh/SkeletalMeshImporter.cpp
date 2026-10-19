@@ -21,6 +21,7 @@
 
 #include "Engine/SkeletalMesh.h"
 #include "Animation/Skeleton.h"
+#include "Settings/FolderImportOptions.h"
 #include "Rendering/SkeletalMeshModel.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 
@@ -165,6 +166,15 @@ USkeleton* ISkeletalMeshImporter::BuildSkeletonFromMesh(USkeletalMesh* SkeletalM
 }
 
 USkeleton* ISkeletalMeshImporter::ResolveSkeleton() {
+	if (const FScopedFolderImportOptions* FolderOptions = FScopedFolderImportOptions::Get()) {
+		FString SourcePath;
+		GetAssetExport()->TryGetStringField(TEXT("Package"), SourcePath);
+		if (SourcePath.IsEmpty()) {
+			SourcePath = GetPackage()->GetName();
+			FRRedirects::Reverse(SourcePath);
+		}
+		if (USkeleton* Override = FolderOptions->GetSkeleton(SourcePath)) return Override;
+	}
 	const FUObjectJsonValueExport SkeletonReference = GetAssetDataAsValue().GetObject(TEXT("Skeleton"));
 
 	if (!SkeletonReference.JsonObject.IsValid() || !SkeletonReference.Has(TEXT("ObjectName"))) {
@@ -429,6 +439,15 @@ bool ISkeletalMeshImporter::Import() {
 		}
 
 		SetMeshRefSkeleton(SkeletalMesh, Skeleton->GetReferenceSkeleton());
+	}
+
+	if (const FScopedFolderImportOptions* FolderOptions = FScopedFolderImportOptions::Get()) {
+		if (FolderOptions->GetSkeleton(FetchPath) && Skeleton && !Skeleton->IsCompatibleMesh(SkeletalMesh)) {
+			FImportIssues::Report(EImportIssue::Data, TEXT("The selected skeleton is incompatible with this mesh"),
+				TEXT("Choose a skeleton with matching bone names and hierarchy. The selected skeleton was not modified."));
+			Abandon(SkeletalMesh);
+			return false;
+		}
 	}
 
 	/* Named no skeleton and now holding the bones it was cooked with: the asset the editor would

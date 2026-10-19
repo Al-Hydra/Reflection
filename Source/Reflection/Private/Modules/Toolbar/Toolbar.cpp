@@ -337,6 +337,33 @@ void UReflectionToolbar::AddReflectionButtons(FToolMenuSection& Section) {
 		FSlateIcon(),
 		true
 	));
+
+	/* Keep the package button and its dropdown together, then offer folders beside them. */
+	FToolMenuEntry& FolderButton = Section.AddEntry(FToolMenuEntry::InitToolBarButton(
+		"ReflectionImportFolder",
+		FToolUIActionChoice(
+			FUIAction(
+				FExecuteAction::CreateLambda([] {
+					if (FImportJob::IsRunning()) return;
+
+					GReflectionRuntime.Update();
+					FRRedirects::Clear();
+					TToolImportFolder().Execute(FString(), /* bUseClipboard */ true);
+				}),
+				FCanExecuteAction::CreateLambda([] {
+					return !FImportJob::IsRunning() && !WaitingForCloud.IsValid() && ImportActionStartedAt == 0.0;
+				}),
+				FGetActionCheckState(),
+				FIsActionButtonVisible::CreateStatic(&IsToolBarVisible)
+			)
+		),
+		NSLOCTEXT("Reflection", "ImportFolderButton", "Folder"),
+		NSLOCTEXT("Reflection", "ImportFolderTooltip", "Import a source-game folder and its subfolders. Preview the asset list and filter types before importing."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ContentBrowser.AssetTreeFolderOpen"),
+		EUserInterfaceActionType::Button
+	));
+
+	FolderButton.StyleNameOverride = FReflectionStyle::GetActionButtonStyleName();
 #endif
 }
 

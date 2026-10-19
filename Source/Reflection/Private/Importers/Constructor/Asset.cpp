@@ -45,6 +45,7 @@ UPackage* FAssetUtilities::CreateAssetPackage(const FString& Path) {
 #endif
 		*Path);
 	Package->FullyLoad();
+	FBulkImportMemory::TrackPackage(Package);
 
 	/* Reflected assets land in folders this project has never had, and the Content Browser builds
 	 * its folder tree from the asset registry's cached paths: a folder it has not been told about

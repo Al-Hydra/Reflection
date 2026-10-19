@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/ConvexCollision.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "Engine/StaticMeshSocket.h"
 #include "Engine/EngineUtilities.h"
@@ -39,7 +40,7 @@ void TToolConvexCollision::Process(UObject* Object, const TArray<TSharedPtr<FJso
 			GetObjectSerializer()->SetExportForDeserialization(JsonObject, StaticMesh);
 			GetObjectSerializer()->Parent = StaticMesh;
 
-			FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+			FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 			GetObjectSerializer()->PropertySerializer->ExportsContainer = Container;
 			GetObjectSerializer()->DeserializeExports(Container);
 

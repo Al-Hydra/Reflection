@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Importers/Constructor/ImportReader.h"
+#include "Importers/Constructor/ImportMemory.h"
 
 #include "Importers/Constructor/ImportIssues.h"
 #include "Importers/Constructor/Importer.h"
@@ -16,6 +17,7 @@
 #include "Modules/Cloud/Remote.h"
 #include "UObject/UObjectHash.h"
 #include "Settings/SettingsAccess.h"
+#include "Settings/FolderImportOptions.h"
 
 #if REFLECTION_RIGVM
 #include "Engine/ControlRigCompatibility.h"
@@ -152,7 +154,7 @@ bool IImportReader::ReadExportsAndImport(const TArray<TSharedPtr<FJsonValue>>& E
 	/* One import, however many references it reaches through */
 	const FAssetUtilities::FRunScope RunScope;
 
-	FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+	FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 
 	const bool IsBlueprint = Container->FindByType(FString("BlueprintGeneratedClass"))->IsJsonValid();
 	
@@ -341,12 +343,12 @@ IImporter* IImportReader::ReadExportAndImport(FUObjectExportContainer* Container
 
 	/* If it inherits DataAsset, use the data asset importer */
 	if (Importer == nullptr && InheritsDataAsset) {
-		Importer = new IDataAssetImporter();
+		Importer = FImportWorkScope::New<IDataAssetImporter>();
 	}
 
 	/* By default, (with no existing importer) use the templated importer with the asset class. */
 	if (Importer == nullptr) {
-		Importer = new ITemplatedImporter<UObject>();
+		Importer = FImportWorkScope::New<ITemplatedImporter<UObject>>();
 	}
 
 	Export->Package = LocalPackage;
@@ -354,6 +356,15 @@ IImporter* IImportReader::ReadExportAndImport(FUObjectExportContainer* Container
 
 	/* Everything the import reports from here on belongs to this asset, including its references */
 	const FImportIssueScope IssueScope(Name, LocalPackage->GetName(), Type);
+
+	/* The assets selected as overrides are inputs, even when the folder also lists their paths. */
+	if (const FScopedFolderImportOptions* FolderOptions = FScopedFolderImportOptions::Get()) {
+		UObject* Existing = StaticFindObjectFast(UObject::StaticClass(), LocalPackage, FName(*Name));
+		if (FolderOptions->IsOverrideAsset(Existing)) {
+			Export->Object = Existing;
+			return Importer;
+		}
+	}
 
 	/* Import the asset ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 	bool Successful = false; {
@@ -367,6 +378,7 @@ IImporter* IImportReader::ReadExportAndImport(FUObjectExportContainer* Container
 	}
 
 	if (!Successful) {
+		FBulkImportMemory::MarkFailedPackage(LocalPackage);
 		FImportIssues::Report(EImportIssue::Failed, TEXT("The importer couldn't build this asset"));
 
 		/* The package is made before the importer runs, so an import that builds nothing leaves an
@@ -390,7 +402,7 @@ IImporter* IImportReader::ReadExportAndImport(FUObjectExportContainer* Container
 		}
 	}
 
-	if (HideNotifications) {
+	if (HideNotifications || FBulkImportMemory::IsActive()) {
 		return Importer;
 	}
 

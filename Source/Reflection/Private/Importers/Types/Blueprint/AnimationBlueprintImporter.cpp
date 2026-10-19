@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Importers/Types/Blueprint/AnimationBlueprintImporter.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "Importers/Types/Blueprint/BlueprintCompile.h"
 #include "AnimGraphNode_BlendListByInt.h"
 #include "AnimGraphNode_CustomProperty.h"
@@ -568,7 +569,7 @@ bool IAnimationBlueprintImporter::Import() {
 			Adding += FString::Printf(TEXT("%s "), *JsonKeyToString(Pair.Key));
 		}
 
-		CreateGraph(One.Value, Layer, new FUObjectExportContainer());
+		CreateGraph(One.Value, Layer, FImportWorkScope::New<FUObjectExportContainer>());
 
 		SettleOutputPose(Layer);
 		SettleInputPoses(Layer);
@@ -1508,7 +1509,7 @@ void IAnimationBlueprintImporter::CreateGraph(const TSharedPtr<FJsonObject>& Ani
 				}
 
 				if (Graph) {
-					FUObjectExportContainer* StateMachineContainer = new FUObjectExportContainer();
+					FUObjectExportContainer* StateMachineContainer = FImportWorkScope::New<FUObjectExportContainer>();
 					CreateGraph(StateMachineAnimNodeProperties, Graph, StateMachineContainer);
 
 					if (Graph->MyResultNode) {
@@ -1680,7 +1681,7 @@ void IAnimationBlueprintImporter::CreateAnimGraphNodes(UEdGraph* AnimGraph, cons
 		/* Only add json object data, transition result is handled different */
 		if (NodeType == "AnimGraphNode_TransitionResult") {
 			OutContainer.Exports.Add(
-				new FUObjectExport(
+				FImportWorkScope::New<FUObjectExport>(
 					FName(*Key),
 					FName(*NodeType),
 					StringToName(AnimGraph->GetName()),
@@ -1721,7 +1722,7 @@ void IAnimationBlueprintImporter::CreateAnimGraphNodes(UEdGraph* AnimGraph, cons
 
 		/* Add new node */
 		OutContainer.Exports.Add(
-			new FUObjectExport(
+			FImportWorkScope::New<FUObjectExport>(
 				FName(*Key),
 				FName(*NodeType),
 				StringToName(AnimGraph->GetName()),

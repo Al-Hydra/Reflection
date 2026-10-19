@@ -16,7 +16,8 @@
  *
  * Split out of ReadAnimationData so an importer that builds the rest of the sequence itself can
  * still get them. It has to run after any InitializeModel: that resets the model, curves included. */
-inline bool ReadAnimationCurves(USerializerContainer* Container, UAnimSequenceBase* AnimSequenceBase) {
+inline bool ReadAnimationCurves(USerializerContainer* Container, UAnimSequenceBase* AnimSequenceBase, int32* OutWrittenCurves = nullptr) {
+	if (OutWrittenCurves) *OutWrittenCurves = 0;
 	if (AnimSequenceBase == nullptr) return false;
 
 	USkeleton* Skeleton = AnimSequenceBase->GetSkeleton();
@@ -61,6 +62,8 @@ inline bool ReadAnimationCurves(USerializerContainer* Container, UAnimSequenceBa
 	}
 
 	int32 UnnamedCurves = 0;
+	int32 InvalidKeys = 0;
+	int32 FixedSingleKeys = 0;
 
 	/* Import the curves */
 	for (const auto& FloatCurveObject : FloatCurves) {
@@ -85,6 +88,33 @@ inline bool ReadAnimationCurves(USerializerContainer* Container, UAnimSequenceBa
 
 			continue;
 		}
+
+		const TArray<TSharedPtr<FJsonValue>>* ExportKeys = nullptr;
+		const TSharedPtr<FJsonObject>* CurveObject = nullptr;
+		if (!FloatCurveObject->AsObject()->TryGetObjectField(TEXT("FloatCurve"), CurveObject)
+			|| !(*CurveObject)->TryGetArrayField(TEXT("Keys"), ExportKeys)) continue;
+		TArray<TSharedPtr<FJsonValue>> Keys;
+		for (const auto& KeyValue : *ExportKeys) {
+			const auto Key = KeyValue.IsValid() ? KeyValue->AsObject() : nullptr;
+			double Time = 0, Value = 0;
+			if (!Key.IsValid() || !Key->TryGetNumberField(TEXT("Value"), Value) || !FMath::IsFinite(Value)) {
+				++InvalidKeys;
+				continue;
+			}
+			if (!Key->TryGetNumberField(TEXT("Time"), Time) || !FMath::IsFinite(Time)) {
+				// A single key in a single-frame pose is constant; its only meaningful time is zero.
+				double Frames = 0;
+				Container->GetAssetData()->TryGetNumberField(TEXT("NumFrames"), Frames);
+				if (ExportKeys->Num() != 1 || Frames != 1) { ++InvalidKeys; continue; }
+				auto Fixed = MakeShared<FJsonObject>(*Key);
+				Fixed->SetNumberField(TEXT("Time"), 0);
+				Keys.Add(MakeShared<FJsonValueObject>(Fixed));
+				++FixedSingleKeys;
+			} else {
+				Keys.Add(KeyValue);
+			}
+		}
+		if (Keys.Num() == 0) continue;
 
 		/* Used to define if a curve is a curve is metadata or not. */
 		int CurveTypeFlags = FloatCurveObject->AsObject()->GetIntegerField(TEXT("CurveTypeFlags"));
@@ -163,7 +193,7 @@ inline bool ReadAnimationCurves(USerializerContainer* Container, UAnimSequenceBa
 #endif
 
 		/* Keys of the track */
-		TArray<TSharedPtr<FJsonValue>> Keys = FloatCurveObject->AsObject()->GetObjectField(TEXT("FloatCurve"))->GetArrayField(TEXT("Keys"));
+		if (OutWrittenCurves) ++*OutWrittenCurves;
 
 		for (const auto& JsonKey : Keys) {
 			TSharedPtr<FJsonObject> Key = JsonKey->AsObject();
@@ -209,7 +239,13 @@ inline bool ReadAnimationCurves(USerializerContainer* Container, UAnimSequenceBa
 	if (UnnamedCurves > 0) {
 		UE_LOG(LogReflection, Warning, TEXT("\"%s\" left %d curve(s) out, the export naming none of them"),
 			*AnimSequenceBase->GetName(), UnnamedCurves);
+		FImportIssues::Report(EImportIssue::Data,
+			FString::Printf(TEXT("%d animation curve(s) have no exported name"), UnnamedCurves),
+			TEXT("These curves were skipped. Morph curves need their original morph-target names; changing the skeleton cannot recover a name exported as None."));
 	}
+	if (InvalidKeys > 0) FImportIssues::Report(EImportIssue::Data,
+		FString::Printf(TEXT("%d animation curve key(s) have invalid time or value data"), InvalidKeys), TEXT("These keys were skipped."));
+	if (FixedSingleKeys > 0) UE_LOG(LogReflection, Display, TEXT("%s: placed %d constant single-frame curve key(s) at time zero"), *AnimSequenceBase->GetName(), FixedSingleKeys);
 
 	return true;
 }

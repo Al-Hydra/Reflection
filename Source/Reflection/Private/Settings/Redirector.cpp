@@ -3,6 +3,7 @@
 #include "Settings/Redirector.h"
 
 #include "Settings/ReflectionSettings.h"
+#include "Settings/FolderImportOptions.h"
 #include "Settings/Runtime.h"
 #include "Engine/EngineUtilities.h"
 
@@ -61,13 +62,22 @@ void FRRedirects::Redirect(FString& Path) {
 		}
 	}
 
-	TArray<FRRedirectorPoint>& Pointers = History.FindOrAdd(Path);
-	Pointers.Append(Points);
+	if (const FScopedFolderImportOptions* Folder = FScopedFolderImportOptions::Get()) {
+		FRRedirectorPoint PrefixPoint;
+		if (Folder->RedirectDestination(Path, PrefixPoint)) Points.Add(PrefixPoint);
+		/* Repeated references need one inverse, not another copy of the same transformations. */
+		History.Add(Path, Points);
+	} else {
+		TArray<FRRedirectorPoint>& Pointers = History.FindOrAdd(Path);
+		Pointers.Append(Points);
+	}
 }
 
 void FRRedirects::Reverse(FString& Path) {
 	TArray<FRRedirectorPoint>* Points = History.Find(Path);
 	if (!Points) {
+		/* Package creation records its directory; geometry fetches may reverse the full package. */
+		if (const FScopedFolderImportOptions* Folder = FScopedFolderImportOptions::Get()) Folder->ReverseDestination(Path);
 		return;
 	}
 

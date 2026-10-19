@@ -11,6 +11,7 @@
 
 namespace {
 	TArray<TSharedPtr<FImportIssueAsset>> GAssets;
+	TMap<FString, TSharedPtr<FImportIssueAsset>> GAssetIndex;
 
 	/* Innermost last: a reference imports from inside the asset that named it */
 	TArray<TSharedPtr<FImportIssueAsset>> GStack;
@@ -27,6 +28,7 @@ namespace {
 	};
 
 	TArray<FPendingReference> GPending;
+	TSet<FString> GPendingKeys;
 
 	/* Anything reported outside an asset's import lands here */
 	const FString UnattributedName = TEXT("Import");
@@ -37,6 +39,19 @@ namespace {
 	 * file of its own where they are being split apart. Asked only at the path the reference used,
 	 * every one of those reads as missing however well it resolved. */
 	bool ResolvesAt(const FString& Path) {
+		if (FBulkImportMemory::IsActive()) {
+			// Checking the report must not load thousands of packages back into memory.
+			auto Exists = [](const FString& ObjectPath) {
+				if (FindObject<UObject>(nullptr, *ObjectPath)) return true;
+				const FAssetData Asset = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"))
+					.Get().GetAssetByObjectPath(FSoftObjectPath(ObjectPath));
+				return Asset.IsValid() && FPackageName::DoesPackageExist(Asset.PackageName.ToString());
+			};
+			if (Exists(Path)) return true;
+			FString Redirected = Path;
+			FRRedirects::Redirect(Redirected);
+			return Redirected != Path && Exists(Redirected);
+		}
 		if (LoadObjectByPath<UObject>(Path) != nullptr) {
 			return true;
 		}
@@ -67,11 +82,8 @@ namespace {
 	}
 
 	TSharedPtr<FImportIssueAsset> FindOrAddAsset(const FString& Name, const FString& Path, const FString& Type) {
-		for (const TSharedPtr<FImportIssueAsset>& Asset : GAssets) {
-			if (Asset->Name == Name && Asset->Path == Path) {
-				return Asset;
-			}
-		}
+		const FString Key = Path + TEXT("\n") + Name;
+		if (const TSharedPtr<FImportIssueAsset>* Existing = GAssetIndex.Find(Key)) return *Existing;
 
 		const TSharedPtr<FImportIssueAsset> Asset = MakeShared<FImportIssueAsset>();
 
@@ -80,6 +92,7 @@ namespace {
 		Asset->Type = Type;
 
 		GAssets.Add(Asset);
+		GAssetIndex.Add(Key, Asset);
 
 		return Asset;
 	}
@@ -130,6 +143,7 @@ void FImportIssues::Finish() {
 	}
 
 	GPending.Reset();
+	GPendingKeys.Reset();
 
 	if (GAssets.Num() == 0) {
 		return;
@@ -231,7 +245,11 @@ void FImportIssues::ReportUnresolvedReference(const FString& Type, const FString
 	Pending.Path = Path;
 
 	/* Held until the run ends, where whether it resolved is a question with an answer */
-	GPending.Add(Pending);
+	const FString Key = Pending.AssetPath + TEXT("\n") + Pending.AssetName + TEXT("\n") + Type + TEXT("\n") + Path + TEXT("\n") + Name;
+	if (!GPendingKeys.Contains(Key)) {
+		GPendingKeys.Add(Key);
+		GPending.Add(MoveTemp(Pending));
+	}
 }
 
 const TArray<TSharedPtr<FImportIssueAsset>>& FImportIssues::GetAssets() {
@@ -252,8 +270,10 @@ int32 FImportIssues::NumIssues() {
 
 void FImportIssues::Clear() {
 	GAssets.Reset();
+	GAssetIndex.Reset();
 	GStack.Reset();
 	GPending.Reset();
+	GPendingKeys.Reset();
 }
 
 #undef LOCTEXT_NAMESPACE

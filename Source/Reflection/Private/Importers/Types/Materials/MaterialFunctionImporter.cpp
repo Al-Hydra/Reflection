@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Importers/Types/Materials/MaterialFunctionImporter.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "Factories/MaterialFunctionFactoryNew.h"
 
 /* 4.25 and below build this module without the engine's shared PCH (see Reflection.Build.cs),
@@ -35,7 +36,7 @@ bool IMaterialFunctionImporter::Import() {
 	if (!OnAssetCreation(MaterialFunction)) return false;
 
 	/* Define editor only data from the JSON */
-	FUObjectExportContainer* ExpressionContainer = new FUObjectExportContainer();
+	FUObjectExportContainer* ExpressionContainer = FImportWorkScope::New<FUObjectExportContainer>();
 	const TSharedPtr<FJsonObject> Props = FindMaterialData(GetAssetType(), ExpressionContainer);
 
 	/* Map out each expression for easier access */

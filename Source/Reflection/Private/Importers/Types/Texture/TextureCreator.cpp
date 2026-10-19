@@ -76,7 +76,7 @@ bool FTextureCreator::CreateTexture2D(UTexture*& OutTexture, TArray<uint8>& Data
 		Texture2D = NewObject<T>(Package, T::StaticClass(), *AssetName, RF_Standalone | RF_Public);
 	} else {
 		UTextureFactory* TextureFactory = NewObject<UTextureFactory>();
-		TextureFactory->AddToRoot();
+		TStrongObjectPtr<UTextureFactory> KeepFactory(TextureFactory);
 		TextureFactory->SuppressImportOverwriteDialog();
 
 		const uint8* ImageData = Data.GetData();
@@ -250,7 +250,7 @@ bool FTextureCreator::CreateVolumeTexture(UTexture*& OutVolumeTexture, TArray<ui
 
 bool FTextureCreator::CreateRenderTarget2D(UTexture*& OutRenderTarget2D, const TSharedPtr<FJsonObject>& Export) {
 	UTextureRenderTargetFactoryNew* TextureFactory = NewObject<UTextureRenderTargetFactoryNew>();
-	TextureFactory->AddToRoot();
+	TStrongObjectPtr<UTextureRenderTargetFactoryNew> KeepFactory(TextureFactory);
 	UTextureRenderTarget2D* RenderTarget2D = Cast<UTextureRenderTarget2D>(TextureFactory->FactoryCreateNew(UTextureRenderTarget2D::StaticClass(), Package, *AssetName, RF_Standalone | RF_Public, nullptr, GWarn));
 
 	if (RenderTarget2D == nullptr) {

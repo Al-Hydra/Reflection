@@ -1,6 +1,7 @@
 /* Copyright Reflection Contributors 2024-2026 */
 
 #include "Modules/Cloud/Tools/AnimationData.h"
+#include "Importers/Constructor/ImportMemory.h"
 #include "Engine/EngineUtilities.h"
 
 #include "Dom/JsonObject.h"
@@ -24,7 +25,7 @@ void TToolAnimationData::Process(UObject* Object, const TArray<TSharedPtr<FJsonV
 		if (Name != Object->GetName()) continue;
 		if (Type != "AnimSequence") continue;
 
-		FUObjectExportContainer* Container = new FUObjectExportContainer(Exports);
+		FUObjectExportContainer* Container = FImportWorkScope::New<FUObjectExportContainer>(Exports);
 
 		for (FUObjectExport* ExportInContainer : Container->Exports) {
 			if (ExportInContainer->GetClass() == UAnimSequence::StaticClass()) {
